@@ -1,4 +1,15 @@
 #!/bin/bash
 export PATH=/usr/local/node/bin:$PATH
+
+# Next.js Turbopack 要求 better-sqlite3-<hash> 在 .next/node_modules/ 下
+# 构建时为规避 fnpack bug 已移到 node_modules/，安装后需创建符号链接恢复
+mkdir -p "${TRIM_APPDEST}/server/.next/node_modules"
+for bs3 in "${TRIM_APPDEST}/server/node_modules"/better-sqlite3-*; do
+    if [ -d "${bs3}" ]; then
+        bs3_name=$(basename "${bs3}")
+        ln -sfn "${bs3}" "${TRIM_APPDEST}/server/.next/node_modules/${bs3_name}"
+    fi
+done
+
 cd "${TRIM_APPDEST}/server" && npm rebuild better-sqlite3 2>/dev/null || true
 exit 0
