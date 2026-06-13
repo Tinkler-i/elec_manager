@@ -80,10 +80,16 @@ export async function POST(request: NextRequest) {
     // 登录成功后重置该 IP 的速率限制
     rateLimitMap.delete(ip);
 
+    // 根据实际请求协议判断 secure，而非 NODE_ENV
+    // 支持反向代理通过 X-Forwarded-Proto 传递 HTTPS 信息
+    const isSecure =
+      request.nextUrl.protocol === 'https:' ||
+      request.headers.get('x-forwarded-proto') === 'https';
+
     const response = NextResponse.json({ success: true, token });
     response.cookies.set('auth_token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isSecure,
       sameSite: 'lax',
       maxAge,
       path: '/',
