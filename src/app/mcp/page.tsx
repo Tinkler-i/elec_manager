@@ -3,76 +3,28 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
-import { Play, Settings, Code, History, BookOpen, Copy, Check } from "lucide-react";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { BookOpen, Copy, Check, Server, Terminal, Plug } from "lucide-react";
 import { toast } from "sonner";
 
-interface McpTool {
+interface McpToolInfo {
   name: string;
+  title: string;
   description: string;
-  inputSchema: {
+  parameters: {
     type: string;
     properties: Record<string, { type: string; description: string }>;
     required?: string[];
   };
-  returns: Record<string, string>;
 }
-
-interface McpCallLog {
-  id: string;
-  tool: string;
-  params: Record<string, unknown>;
-  result: unknown;
-  timestamp: string;
-  status: "success" | "error";
-}
-
-const exampleRequests = [
-  {
-    title: "查询所有读数",
-    tool: "获取读数",
-    params: "{}",
-  },
-  {
-    title: "查询指定日期范围的读数",
-    tool: "获取读数",
-    params: JSON.stringify({ start_date: "2026-01-01", end_date: "2026-06-30" }, null, 2),
-  },
-  {
-    title: "添加一条读数",
-    tool: "添加读数",
-    params: JSON.stringify({ reading_value: 1250, reading_date: "2026-06-13", notes: "抄表" }, null, 2),
-  },
-  {
-    title: "获取用电统计",
-    tool: "用电统计",
-    params: "{}",
-  },
-  {
-    title: "创建数据库备份",
-    tool: "备份数据库",
-    params: "{}",
-  },
-];
 
 export default function McpPage() {
-  const [tools, setTools] = useState<McpTool[]>([]);
+  const [tools, setTools] = useState<McpToolInfo[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedTool, setSelectedTool] = useState<McpTool | null>(null);
-  const [params, setParams] = useState("{}");
-  const [calling, setCalling] = useState(false);
-  const [callResult, setCallResult] = useState<string>("");
-  const [callLogs, setCallLogs] = useState<McpCallLog[]>([]);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [tokenCopied, setTokenCopied] = useState(false);
   const [token, setToken] = useState("");
+  const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
     fetchTools();
@@ -81,7 +33,7 @@ export default function McpPage() {
 
   async function fetchTools() {
     try {
-      const response = await fetch("/api/mcp");
+      const response = await fetch("/api/mcp/tools");
       const data = await response.json();
       setTools(data.tools || []);
     } catch (error) {
@@ -94,293 +46,249 @@ export default function McpPage() {
   async function fetchToken() {
     try {
       const response = await fetch("/api/auth/token");
-      if (!response.ok) {
-        console.error("获取token失败:", response.status);
-        return;
-      }
-      const contentType = response.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-        console.error("响应不是JSON格式");
-        return;
-      }
+      if (!response.ok) return;
       const data = await response.json();
-      if (data.token) {
-        setToken(data.token);
-      }
+      if (data.token) setToken(data.token);
     } catch (error) {
       console.error("获取token失败:", error);
     }
   }
 
-  async function copyToken() {
+  function getBaseUrl() {
+    if (typeof window === "undefined") return "";
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+
+  async function copyText(text: string, label: string) {
     try {
-      await navigator.clipboard.writeText(token);
-      setTokenCopied(true);
-      toast.success("Token 已复制到剪贴板");
-      setTimeout(() => setTokenCopied(false), 2000);
+      await navigator.clipboard.writeText(text);
+      setCopied(label);
+      toast.success("已复制到剪贴板");
+      setTimeout(() => setCopied(null), 2000);
     } catch {
       toast.error("复制失败");
     }
   }
 
-  async function handleCallTool() {
-    if (!selectedTool) return;
-
-    setCalling(true);
-    setCallResult("");
-
-    try {
-      let parsedParams = {};
-      if (params.trim()) {
-        parsedParams = JSON.parse(params);
-      }
-
-      const response = await fetch("/api/mcp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tool: selectedTool.name,
-          params: parsedParams,
-        }),
-      });
-
-      const data = await response.json();
-
-      const log: McpCallLog = {
-        id: Date.now().toString(),
-        tool: selectedTool.name,
-        params: parsedParams,
-        result: data,
-        timestamp: new Date().toISOString(),
-        status: response.ok ? "success" : "error",
-      };
-
-      setCallLogs((prev) => [log, ...prev].slice(0, 50));
-      setCallResult(JSON.stringify(data, null, 2));
-
-      if (response.ok) {
-        toast.success(`${selectedTool.name} 调用成功`);
-      } else {
-        toast.error(data.error || "调用失败");
-      }
-    } catch (error) {
-      const log: McpCallLog = {
-        id: Date.now().toString(),
-        tool: selectedTool.name,
-        params: JSON.parse(params || "{}"),
-        result: { error: "JSON解析失败或网络错误" },
-        timestamp: new Date().toISOString(),
-        status: "error",
-      };
-      setCallLogs((prev) => [log, ...prev].slice(0, 50));
-      setCallResult(JSON.stringify({ error: "JSON解析失败或网络错误" }, null, 2));
-      toast.error("调用失败");
-    } finally {
-      setCalling(false);
-    }
+  function CopyButton({ text, label }: { text: string; label: string }) {
+    return (
+      <Button variant="outline" size="sm" onClick={() => copyText(text, label)}>
+        {copied === label ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+      </Button>
+    );
   }
 
-  function openToolDialog(tool: McpTool) {
-    setSelectedTool(tool);
-    const defaultParams: Record<string, unknown> = {};
-    if (tool.inputSchema.properties) {
-      Object.entries(tool.inputSchema.properties).forEach(([key, prop]) => {
-        if (prop.type === "string") {
-          defaultParams[key] = "";
-        } else if (prop.type === "number") {
-          defaultParams[key] = 0;
-        }
-      });
-    }
-    setParams(JSON.stringify(defaultParams, null, 2));
-    setCallResult("");
-    setDialogOpen(true);
-  }
+  const mcpUrl = `${getBaseUrl()}/api/mcp`;
 
-  function loadExample(example: typeof exampleRequests[0]) {
-    const tool = tools.find(t => t.name === example.tool);
-    if (tool) {
-      setSelectedTool(tool);
-      setParams(example.params);
-      setCallResult("");
-      setDialogOpen(true);
-    }
-  }
+  const streamableHttpConfig = JSON.stringify({
+    mcpServers: {
+      "elec-meter": {
+        url: mcpUrl,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    },
+  }, null, 2);
+
+  const stdioConfig = JSON.stringify({
+    mcpServers: {
+      "elec-meter": {
+        command: "npx",
+        args: ["tsx", "/path/to/elec/mcp-server.ts"],
+        env: {
+          ELEC_DB_PATH: "/path/to/data/elec.db",
+        },
+      },
+    },
+  }, null, 2);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">MCP 工具</h1>
+        <h1 className="text-2xl font-bold text-gray-900">MCP 服务</h1>
         <Badge variant="outline" className="text-sm">
-          {tools.length} 个工具可用
+          <Plug className="w-3 h-3 mr-1" />
+          {tools.length} 个工具
         </Badge>
       </div>
 
-      <Tabs defaultValue="usage">
+      <Tabs defaultValue="streamable">
         <TabsList>
-          <TabsTrigger value="usage">
-            <BookOpen className="w-4 h-4 mr-2" />
-            使用说明
+          <TabsTrigger value="streamable">
+            <Server className="w-4 h-4 mr-2" />
+            Streamable HTTP
+          </TabsTrigger>
+          <TabsTrigger value="stdio">
+            <Terminal className="w-4 h-4 mr-2" />
+            Stdio
           </TabsTrigger>
           <TabsTrigger value="tools">
-            <Settings className="w-4 h-4 mr-2" />
+            <BookOpen className="w-4 h-4 mr-2" />
             工具列表
-          </TabsTrigger>
-          <TabsTrigger value="test">
-            <Code className="w-4 h-4 mr-2" />
-            在线测试
-          </TabsTrigger>
-          <TabsTrigger value="logs">
-            <History className="w-4 h-4 mr-2" />
-            调用日志
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="usage" className="space-y-6">
+        {/* Streamable HTTP 配置 */}
+        <TabsContent value="streamable" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>MCP 认证 Token</CardTitle>
+              <CardTitle>Streamable HTTP 连接</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-gray-600">
-                AI 客户端连接时需要此 Token 进行认证。点击复制按钮获取 Token。
+                通过标准 MCP Streamable HTTP 协议连接。适用于支持远程 MCP 服务器的 AI 客户端。
               </p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-xs overflow-auto break-all">
-                  {token || "获取中..."}
-                </code>
-                <Button variant="outline" size="sm" onClick={copyToken} disabled={!token}>
-                  {tokenCopied ? (
-                    <Check className="w-4 h-4" />
-                  ) : (
-                    <Copy className="w-4 h-4" />
-                  )}
-                </Button>
+
+              <div>
+                <label className="text-sm font-medium text-gray-700">MCP 端点</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-sm font-mono">
+                    {mcpUrl || "加载中..."}
+                  </code>
+                  <CopyButton text={mcpUrl} label="url" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-gray-700">认证 Token</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-xs font-mono overflow-auto break-all">
+                    {token || "获取中..."}
+                  </code>
+                  <CopyButton text={token} label="token" />
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  在请求头中添加 <code className="bg-gray-100 px-1 rounded">Authorization: Bearer &lt;token&gt;</code>
+                </p>
               </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>MCP 接口说明</CardTitle>
+              <CardTitle>客户端配置示例</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="text-sm space-y-2">
-                <p><strong>接口地址：</strong><code className="bg-gray-100 px-2 py-1 rounded">POST /api/mcp</code></p>
-                <p><strong>请求格式：</strong></p>
-                <pre className="bg-gray-100 p-3 rounded-lg text-xs overflow-auto">{`{
-  "tool": "工具名称",
-  "params": { 参数对象 }
-}`}</pre>
-                <p><strong>响应格式（成功）：</strong></p>
-                <pre className="bg-gray-100 p-3 rounded-lg text-xs overflow-auto">{`{
-  "result": { 返回数据 }
-}`}</pre>
-                <p><strong>响应格式（失败）：</strong></p>
-                <pre className="bg-gray-100 p-3 rounded-lg text-xs overflow-auto">{`{
-  "error": "错误信息"
-}`}</pre>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Claude Desktop / Cursor / Windsurf</label>
+                <div className="flex items-start gap-2 mt-1">
+                  <pre className="flex-1 bg-gray-900 text-gray-100 p-4 rounded-lg text-xs font-mono overflow-auto">
+                    {streamableHttpConfig}
+                  </pre>
+                  <CopyButton text={streamableHttpConfig} label="http-config" />
+                </div>
               </div>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>可调用的工具</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {loading ? (
-                <div className="text-center py-4">加载中...</div>
-              ) : (
-                <div className="space-y-3">
-                  {tools.map((tool) => (
-                    <div key={tool.name} className="p-3 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-2 mb-1">
-                        <code className="font-medium text-blue-600">{tool.name}</code>
-                      </div>
-                      <p className="text-sm text-gray-600 mb-2">{tool.description}</p>
-                      {Object.keys(tool.inputSchema.properties).length > 0 && (
-                        <div className="text-xs text-gray-500">
-                          参数：{Object.entries(tool.inputSchema.properties).map(([key, prop], i) => (
-                            <span key={key}>
-                              {i > 0 && "，"}
-                              <code>{key}</code>({prop.description})
-                              {tool.inputSchema.required?.includes(key) && <span className="text-red-500">*</span>}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>调用示例</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {exampleRequests.map((example, i) => (
-                <div key={i} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <div className="font-medium">{example.title}</div>
-                    <div className="text-xs text-gray-500">工具：{example.tool}</div>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={() => loadExample(example)}>
-                    <Play className="w-4 h-4 mr-1" />
-                    试一试
-                  </Button>
-                </div>
-              ))}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-sm text-blue-800">
+                  <strong>提示：</strong>请将配置中的 URL 和 Token 替换为实际值。如果使用反向代理，URL 可能需要调整。
+                </p>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
 
+        {/* Stdio 配置 */}
+        <TabsContent value="stdio" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Stdio 本地连接</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-gray-600">
+                通过标准输入/输出 (stdio) 在本地运行 MCP 服务器。适用于 AI 客户端与服务器在同一台机器上的场景。
+              </p>
+
+              <div>
+                <label className="text-sm font-medium text-gray-700">运行命令</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-sm font-mono">
+                    npx tsx mcp-server.ts
+                  </code>
+                  <CopyButton text="npx tsx mcp-server.ts" label="cmd" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-gray-700">环境变量</label>
+                <Table className="mt-1">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>变量名</TableHead>
+                      <TableHead>说明</TableHead>
+                      <TableHead>默认值</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell><code className="text-xs">ELEC_DB_PATH</code></TableCell>
+                      <TableCell className="text-sm">SQLite 数据库文件路径</TableCell>
+                      <TableCell><code className="text-xs">data/elec.db</code></TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>客户端配置示例</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div>
+                <label className="text-sm font-medium text-gray-700">Claude Desktop / Cursor / Windsurf</label>
+                <div className="flex items-start gap-2 mt-1">
+                  <pre className="flex-1 bg-gray-900 text-gray-100 p-4 rounded-lg text-xs font-mono overflow-auto">
+                    {stdioConfig}
+                  </pre>
+                  <CopyButton text={stdioConfig} label="stdio-config" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* 工具列表 */}
         <TabsContent value="tools" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>工具详情</CardTitle>
+              <CardTitle>可用工具 ({tools.length})</CardTitle>
             </CardHeader>
             <CardContent>
               {loading ? (
-                <div className="text-center py-4">加载中...</div>
+                <div className="text-center py-4 text-gray-500">加载中...</div>
               ) : tools.length === 0 ? (
                 <div className="text-center py-4 text-gray-500">暂无可用工具</div>
               ) : (
                 <div className="space-y-4">
                   {tools.map((tool) => (
                     <div key={tool.name} className="border rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="font-medium text-lg">{tool.name}</h3>
-                        <Button variant="ghost" size="sm" onClick={() => openToolDialog(tool)}>
-                          <Play className="w-4 h-4 mr-1" />
-                          测试
-                        </Button>
+                      <div className="flex items-center gap-2 mb-2">
+                        <code className="font-medium text-blue-600 text-sm">{tool.name}</code>
+                        <Badge variant="secondary" className="text-xs">{tool.title}</Badge>
                       </div>
                       <p className="text-sm text-gray-600 mb-3">{tool.description}</p>
 
-                      {Object.keys(tool.inputSchema.properties).length > 0 && (
-                        <div className="mb-3">
-                          <Label className="text-xs text-gray-500">请求参数</Label>
-                          <Table>
+                      {tool.parameters.properties && Object.keys(tool.parameters.properties).length > 0 && (
+                        <div>
+                          <label className="text-xs font-medium text-gray-500">参数</label>
+                          <Table className="mt-1">
                             <TableHeader>
                               <TableRow>
-                                <TableHead>参数名</TableHead>
-                                <TableHead>类型</TableHead>
-                                <TableHead>说明</TableHead>
-                                <TableHead>必填</TableHead>
+                                <TableHead className="text-xs">参数名</TableHead>
+                                <TableHead className="text-xs">类型</TableHead>
+                                <TableHead className="text-xs">说明</TableHead>
+                                <TableHead className="text-xs">必填</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {Object.entries(tool.inputSchema.properties).map(([key, prop]) => (
+                              {Object.entries(tool.parameters.properties).map(([key, prop]) => (
                                 <TableRow key={key}>
-                                  <TableCell><code className="text-sm">{key}</code></TableCell>
-                                  <TableCell>{prop.type}</TableCell>
-                                  <TableCell>{prop.description}</TableCell>
+                                  <TableCell><code className="text-xs">{key}</code></TableCell>
+                                  <TableCell className="text-xs">{prop.type}</TableCell>
+                                  <TableCell className="text-xs">{prop.description}</TableCell>
                                   <TableCell>
-                                    {tool.inputSchema.required?.includes(key) ? (
+                                    {tool.parameters.required?.includes(key) ? (
                                       <Badge variant="destructive" className="text-xs">必填</Badge>
                                     ) : (
                                       <Badge variant="secondary" className="text-xs">可选</Badge>
@@ -392,170 +300,14 @@ export default function McpPage() {
                           </Table>
                         </div>
                       )}
-
-                      {Object.keys(tool.returns).length > 0 && (
-                        <div>
-                          <Label className="text-xs text-gray-500">返回字段</Label>
-                          <div className="mt-1 flex flex-wrap gap-2">
-                            {Object.entries(tool.returns).map(([key, desc]) => (
-                              <div key={key} className="text-xs bg-gray-100 px-2 py-1 rounded">
-                                <code className="font-medium">{key}</code>: {desc}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="test" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>在线测试</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label>选择工具</Label>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {tools.map((tool) => (
-                    <Button
-                      key={tool.name}
-                      variant={selectedTool?.name === tool.name ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => openToolDialog(tool)}
-                    >
-                      {tool.name}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {selectedTool && (
-                <>
-                  <div>
-                    <Label>参数 (JSON)</Label>
-                    <Textarea
-                      value={params}
-                      onChange={(e) => setParams(e.target.value)}
-                      rows={8}
-                      className="font-mono text-sm"
-                    />
-                  </div>
-
-                  <Button onClick={handleCallTool} disabled={calling}>
-                    {calling ? "调用中..." : "执行调用"}
-                  </Button>
-
-                  {callResult && (
-                    <div>
-                      <Label>执行结果</Label>
-                      <pre className="mt-2 p-4 bg-gray-100 rounded-lg overflow-auto max-h-96 font-mono text-sm">
-                        {callResult}
-                      </pre>
-                    </div>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="logs" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>调用历史</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {callLogs.length === 0 ? (
-                <div className="text-center py-4 text-gray-500">暂无调用记录</div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>时间</TableHead>
-                      <TableHead>工具</TableHead>
-                      <TableHead>状态</TableHead>
-                      <TableHead>参数</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {callLogs.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell className="text-sm">
-                          {new Date(log.timestamp).toLocaleTimeString("zh-CN")}
-                        </TableCell>
-                        <TableCell className="font-mono">{log.tool}</TableCell>
-                        <TableCell>
-                          <Badge variant={log.status === "success" ? "default" : "destructive"}>
-                            {log.status === "success" ? "成功" : "失败"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-sm font-mono max-w-[200px] truncate">
-                          {JSON.stringify(log.params)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
-
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{selectedTool?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-gray-600">{selectedTool?.description}</p>
-
-            {selectedTool && Object.keys(selectedTool.returns).length > 0 && (
-              <div>
-                <Label>返回字段</Label>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {Object.entries(selectedTool.returns).map(([key, desc]) => (
-                    <div key={key} className="text-xs bg-gray-100 px-2 py-1 rounded">
-                      <code className="font-medium">{key}</code>: {desc}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <Separator />
-
-            <div>
-              <Label>参数 (JSON)</Label>
-              <Textarea
-                value={params}
-                onChange={(e) => setParams(e.target.value)}
-                rows={6}
-                className="font-mono text-sm"
-              />
-            </div>
-
-            <Button onClick={handleCallTool} disabled={calling} className="w-full">
-              {calling ? "调用中..." : "执行调用"}
-            </Button>
-
-            {callResult && (
-              <div>
-                <Label>执行结果</Label>
-                <pre className="mt-2 p-4 bg-gray-100 rounded-lg overflow-auto max-h-60 font-mono text-sm">
-                  {callResult}
-                </pre>
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

@@ -1,43 +1,42 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getMcpTools, callMcpTool } from '@/lib/mcp-server';
-import { verifyToken } from '@/lib/auth';
+import { createMcpServer } from '@/lib/mcp-server';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 
-export async function GET(request: NextRequest) {
+/**
+ * MCP Streamable HTTP Endpoint
+ *
+ * 实现标准 MCP 协议的 Streamable HTTP 传输。
+ * AI 客户端（Claude Desktop、Cursor 等）可通过此端点与本系统进行 MCP 通信。
+ *
+ * 认证：通过 middleware 校验 Authorization: Bearer <token>
+ * 协议：MCP Streamable HTTP Transport (stateless mode)
+ */
+
+async function handleMcpRequest(request: Request): Promise<Response> {
+  const server = createMcpServer();
+
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,      // stateless mode
+    enableJsonResponse: true,           // JSON response (no SSE streaming)
+  });
+
+  await server.connect(transport);
+
   try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '') ||
-                  request.cookies.get('auth_token')?.value;
-
-    if (!token || !verifyToken(token)) {
-      return NextResponse.json({ error: '未授权，请先登录' }, { status: 401 });
-    }
-
-    const tools = getMcpTools();
-    return NextResponse.json({ tools });
-  } catch (error) {
-    return NextResponse.json({ error: '获取工具列表失败' }, { status: 500 });
+    const response = await transport.handleRequest(request);
+    return response;
+  } finally {
+    await server.close();
   }
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const token = request.headers.get('authorization')?.replace('Bearer ', '') ||
-                  request.cookies.get('auth_token')?.value;
+export async function POST(request: Request): Promise<Response> {
+  return handleMcpRequest(request);
+}
 
-    if (!token || !verifyToken(token)) {
-      return NextResponse.json({ error: '未授权，请先登录' }, { status: 401 });
-    }
+export async function GET(request: Request): Promise<Response> {
+  return handleMcpRequest(request);
+}
 
-    const body = await request.json();
-    const { tool, params } = body;
-
-    if (!tool) {
-      return NextResponse.json({ error: '工具名称不能为空' }, { status: 400 });
-    }
-
-    const result = await callMcpTool(tool, params || {});
-    return NextResponse.json({ result });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '工具执行失败';
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+export async function DELETE(request: Request): Promise<Response> {
+  return handleMcpRequest(request);
 }

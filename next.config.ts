@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports: ["lucide-react", "chart.js", "react-chartjs-2"],
   },
-  serverExternalPackages: ["better-sqlite3"],
+  serverExternalPackages: ["better-sqlite3", "@modelcontextprotocol/sdk"],
 };
 
 export default nextConfig;

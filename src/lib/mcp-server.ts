@@ -1,40 +1,116 @@
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import { getDb, generateId, getRatePerKwh } from './db';
-import { Reading } from '@/types';
+import fs from 'fs';
+import path from 'path';
 
-interface McpTool {
+// ─── Tool Metadata (for UI display) ─────────────────────────────────────────
+
+export interface McpToolInfo {
   name: string;
+  title: string;
   description: string;
   parameters: Record<string, unknown>;
-  returns: Record<string, string>;
-  handler: (params: Record<string, unknown>) => Promise<unknown>;
 }
 
-const tools: McpTool[] = [
-  {
-    name: '添加读数',
-    description: '记录一条电表读数。系统会自动计算与前一条读数的用电量差值。读数必须按时间递增，不能小于前一条读数，也不能大于后一条读数。如果是数据库中的第一条读数，会使用设置中的初始读数作为基准。',
-    parameters: {
-      type: 'object',
-      properties: {
-        reading_value: { type: 'number', description: '电表当前读数（整数或小数）' },
-        reading_date: { type: 'string', description: '读数日期，格式 YYYY-MM-DD' },
-        notes: { type: 'string', description: '可选备注信息' },
+export function getToolInfoList(): McpToolInfo[] {
+  return [
+    {
+      name: 'add_reading',
+      title: '添加读数',
+      description: '记录一条电表读数。系统自动计算与前一条读数的用电量差值。读数必须按时间递增，不能小于前一条读数，也不能大于后一条读数。如果是数据库中的第一条读数，会使用设置中的初始读数作为基准。',
+      parameters: {
+        type: 'object',
+        properties: {
+          reading_value: { type: 'number', description: '电表当前读数（整数或小数）' },
+          reading_date: { type: 'string', description: '读数日期，格式 YYYY-MM-DD' },
+          notes: { type: 'string', description: '可选备注信息' },
+        },
+        required: ['reading_value', 'reading_date'],
       },
-      required: ['reading_value', 'reading_date'],
     },
-    returns: {
-      id: '记录ID',
-      reading_value: '表读数',
-      reading_date: '读数日期',
-      previous_reading: '前一次读数',
-      units_consumed: '本次用电量（自动计算）',
-      notes: '备注',
-      source: '数据来源（mcp）',
-      created_at: '创建时间',
+    {
+      name: 'list_readings',
+      title: '获取读数',
+      description: '查询电表读数记录。支持按日期范围筛选，返回指定范围内的所有读数记录，包含每次读数的用电量。数据按日期降序排列（最新在前）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          start_date: { type: 'string', description: '开始日期 YYYY-MM-DD' },
+          end_date: { type: 'string', description: '结束日期 YYYY-MM-DD' },
+          limit: { type: 'number', description: '返回记录数量上限' },
+        },
+      },
     },
-    handler: async (params) => {
+    {
+      name: 'get_stats',
+      title: '用电统计',
+      description: '获取电表的用电统计概览，包括总读数次数、总用电量、总费用、本月用电量和本月费用。',
+      parameters: { type: 'object', properties: {} },
+    },
+    {
+      name: 'export_readings',
+      title: '导出数据',
+      description: '将电表读数数据导出为结构化数据，返回所有读数记录。',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', description: '导出类型，目前仅支持 "readings"' },
+        },
+        required: ['type'],
+      },
+    },
+    {
+      name: 'backup_database',
+      title: '备份数据库',
+      description: '创建当前数据库的完整备份文件，存储在服务器 data/backups 目录下。',
+      parameters: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_settings',
+      title: '获取设置',
+      description: '获取系统配置信息，包括电价费率和初始读数等设置。',
+      parameters: { type: 'object', properties: {} },
+    },
+  ];
+}
+
+// ─── Tool Handler Helpers ───────────────────────────────────────────────────
+
+function jsonResult(data: unknown) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+  };
+}
+
+function errorResult(message: string) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
+    isError: true,
+  };
+}
+
+// ─── Shared MCP Server Factory ──────────────────────────────────────────────
+
+export function createMcpServer(): McpServer {
+  const server = new McpServer({
+    name: 'elec-meter',
+    version: '1.1.0',
+  });
+
+  // ── 添加读数 ──────────────────────────────────────────────────────────
+  server.registerTool('add_reading', {
+    title: '添加读数',
+    description: '记录一条电表读数。系统自动计算用电量。读数必须按时间递增，不能小于前一条读数，也不能大于后一条读数。',
+    inputSchema: {
+      reading_value: z.number().describe('电表当前读数'),
+      reading_date: z.string().describe('读数日期，格式 YYYY-MM-DD'),
+      notes: z.string().optional().describe('可选备注信息'),
+    },
+  }, async (args) => {
+    try {
       const db = getDb();
-      const { reading_value, reading_date, notes } = params;
+      const { reading_value, reading_date, notes } = args;
 
       const prevReading = db.prepare(
         'SELECT reading_value FROM readings WHERE reading_date < ? ORDER BY reading_date DESC LIMIT 1'
@@ -44,16 +120,14 @@ const tools: McpTool[] = [
         'SELECT reading_value FROM readings WHERE reading_date > ? ORDER BY reading_date ASC LIMIT 1'
       ).get(reading_date) as { reading_value: number } | undefined;
 
-      if (prevReading && (reading_value as number) < prevReading.reading_value) {
-        throw new Error(`读数不能小于前一次读数 (${prevReading.reading_value})`);
+      if (prevReading && reading_value < prevReading.reading_value) {
+        return errorResult(`读数不能小于前一次读数 (${prevReading.reading_value})`);
+      }
+      if (nextReading && reading_value > nextReading.reading_value) {
+        return errorResult(`读数不能大于后一次读数 (${nextReading.reading_value})`);
       }
 
-      if (nextReading && (reading_value as number) > nextReading.reading_value) {
-        throw new Error(`读数不能大于后一次读数 (${nextReading.reading_value})`);
-      }
-
-      let previous_reading = prevReading?.reading_value ?? null;
-
+      let previous_reading: number | null = prevReading?.reading_value ?? null;
       if (!prevReading) {
         const initialSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('initial_reading') as { value: string } | undefined;
         previous_reading = initialSetting ? parseFloat(initialSetting.value) : null;
@@ -66,183 +140,132 @@ const tools: McpTool[] = [
       `).run(id, reading_value, reading_date, previous_reading, notes || null);
 
       const newReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id);
+      return jsonResult(newReading);
+    } catch (e) {
+      return errorResult(e instanceof Error ? e.message : '添加读数失败');
+    }
+  });
 
-      return newReading;
+  // ── 获取读数 ──────────────────────────────────────────────────────────
+  server.registerTool('list_readings', {
+    title: '获取读数',
+    description: '查询电表读数记录，支持按日期范围筛选，数据按日期降序排列。',
+    inputSchema: {
+      start_date: z.string().optional().describe('开始日期 YYYY-MM-DD'),
+      end_date: z.string().optional().describe('结束日期 YYYY-MM-DD'),
+      limit: z.number().optional().describe('返回数量上限'),
     },
-  },
-  {
-    name: '获取读数',
-    description: '查询电表读数记录。支持按日期范围筛选，返回指定范围内的所有读数记录，包含每次读数的用电量。数据按日期降序排列（最新在前）。',
-    parameters: {
-      type: 'object',
-      properties: {
-        start_date: { type: 'string', description: '开始日期，格式 YYYY-MM-DD，返回此日期及之后的记录' },
-        end_date: { type: 'string', description: '结束日期，格式 YYYY-MM-DD，返回此日期及之前的记录' },
-        limit: { type: 'number', description: '返回记录数量上限，不设置则返回全部' },
-      },
-    },
-    returns: {
-      'Reading[]': '读数记录数组，每条包含 id, reading_value, reading_date, previous_reading, units_consumed, notes, source, created_at',
-    },
-    handler: async (params) => {
+  }, async (args) => {
+    try {
       const db = getDb();
-      const { start_date, end_date, limit } = params;
-
       let query = 'SELECT * FROM readings WHERE 1=1';
-      const queryParams: unknown[] = [];
+      const params: unknown[] = [];
 
-      if (start_date) {
+      if (args.start_date) {
         query += ' AND reading_date >= ?';
-        queryParams.push(start_date);
+        params.push(args.start_date);
       }
-      if (end_date) {
+      if (args.end_date) {
         query += ' AND reading_date <= ?';
-        queryParams.push(end_date);
+        params.push(args.end_date);
       }
-
       query += ' ORDER BY reading_date DESC';
-
-      if (limit) {
+      if (args.limit) {
         query += ' LIMIT ?';
-        queryParams.push(limit);
+        params.push(args.limit);
       }
 
-      return db.prepare(query).all(...queryParams);
-    },
-  },
-  {
-    name: '用电统计',
-    description: '获取电表的用电统计概览，包括总读数次数、总用电量、总费用、本月用电量和本月费用。用于快速了解用电情况。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    returns: {
-      totalReadings: '总读数记录数',
-      totalConsumed: '累计总用电量（度）',
-      totalAmount: '累计总费用（元）',
-      currentMonthConsumed: '本月用电量（度）',
-      currentMonthAmount: '本月费用（元）',
-    },
-    handler: async () => {
-      const db = getDb();
+      const rows = db.prepare(query).all(...params);
+      return jsonResult(rows);
+    } catch (e) {
+      return errorResult(e instanceof Error ? e.message : '查询读数失败');
+    }
+  });
 
+  // ── 用电统计 ──────────────────────────────────────────────────────────
+  server.registerTool('get_stats', {
+    title: '用电统计',
+    description: '获取用电统计概览：总读数次数、总用电量、总费用、本月用电量和本月费用。',
+    inputSchema: {},
+  }, async () => {
+    try {
+      const db = getDb();
       const totalReadings = (db.prepare('SELECT COUNT(*) as count FROM readings').get() as { count: number }).count;
       const totalConsumed = (db.prepare('SELECT COALESCE(SUM(units_consumed), 0) as total FROM readings').get() as { total: number }).total;
 
       const now = new Date();
       const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-
-      const currentMonthConsumed = (db.prepare(`
-        SELECT COALESCE(SUM(units_consumed), 0) as total FROM readings
-        WHERE reading_date LIKE ? || '%'
-      `).get(currentMonth) as { total: number }).total;
+      const currentMonthConsumed = (db.prepare(
+        `SELECT COALESCE(SUM(units_consumed), 0) as total FROM readings WHERE reading_date LIKE ? || '%'`
+      ).get(currentMonth) as { total: number }).total;
 
       const ratePerKwh = getRatePerKwh();
-      const currentMonthAmount = currentMonthConsumed * ratePerKwh;
-      const totalAmount = totalConsumed * ratePerKwh;
-
-      return {
+      return jsonResult({
         totalReadings,
         totalConsumed,
-        totalAmount,
+        totalAmount: totalConsumed * ratePerKwh,
         currentMonthConsumed,
-        currentMonthAmount,
-      };
+        currentMonthAmount: currentMonthConsumed * ratePerKwh,
+      });
+    } catch (e) {
+      return errorResult(e instanceof Error ? e.message : '获取统计失败');
+    }
+  });
+
+  // ── 导出数据 ──────────────────────────────────────────────────────────
+  server.registerTool('export_readings', {
+    title: '导出数据',
+    description: '导出所有电表读数数据。',
+    inputSchema: {
+      type: z.literal('readings').describe('导出类型，目前仅支持 "readings"'),
     },
-  },
-  {
-    name: '导出数据',
-    description: '将电表读数数据导出为结构化数据。目前支持导出读数记录。',
-    parameters: {
-      type: 'object',
-      properties: {
-        type: { type: 'string', description: '导出类型，目前仅支持 "readings"' },
-      },
-      required: ['type'],
-    },
-    returns: {
-      count: '导出记录数',
-      data: '数据数组',
-    },
-    handler: async (params) => {
+  }, async (args) => {
+    try {
       const db = getDb();
-      const { type } = params;
+      const data = db.prepare('SELECT * FROM readings ORDER BY reading_date DESC').all();
+      return jsonResult({ count: (data as unknown[]).length, data });
+    } catch (e) {
+      return errorResult(e instanceof Error ? e.message : '导出数据失败');
+    }
+  });
 
-      let data: Record<string, unknown>[];
-      if (type === 'readings') {
-        data = db.prepare('SELECT * FROM readings ORDER BY reading_date DESC').all() as Record<string, unknown>[];
-      } else {
-        throw new Error('无效的导出类型');
-      }
-
-      return { count: data.length, data };
-    },
-  },
-  {
-    name: '备份数据库',
-    description: '创建当前数据库的完整备份文件。备份文件存储在服务器的 data/backups 目录下。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    returns: {
-      message: '操作结果消息',
-      fileName: '备份文件名',
-    },
-    handler: async () => {
+  // ── 备份数据库 ────────────────────────────────────────────────────────
+  server.registerTool('backup_database', {
+    title: '备份数据库',
+    description: '创建当前数据库的完整备份文件。',
+    inputSchema: {},
+  }, async () => {
+    try {
       const db = getDb();
-      const fs = await import('fs');
-      const path = await import('path');
-
       const backupDir = path.join(process.cwd(), 'data', 'backups');
       if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
       }
-
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `elec-backup-${timestamp}.db`;
-      const backupPath = path.join(backupDir, fileName);
+      await db.backup(path.join(backupDir, fileName));
+      return jsonResult({ message: '备份成功', fileName });
+    } catch (e) {
+      return errorResult(e instanceof Error ? e.message : '备份失败');
+    }
+  });
 
-      await db.backup(backupPath);
-
-      return { message: '备份成功', fileName };
-    },
-  },
-  {
-    name: '获取设置',
-    description: '获取系统配置信息，包括电价费率和初始读数等设置。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    returns: {
-      rate_per_kwh: '每度电价（元）',
-      initial_reading: '电表初始读数',
-    },
-    handler: async () => {
+  // ── 获取设置 ──────────────────────────────────────────────────────────
+  server.registerTool('get_settings', {
+    title: '获取设置',
+    description: '获取系统配置信息，包括电价费率和初始读数。',
+    inputSchema: {},
+  }, async () => {
+    try {
       const db = getDb();
       const settings = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
       const result: Record<string, string> = {};
       settings.forEach(s => { result[s.key] = s.value; });
-      return result;
-    },
-  },
-];
+      return jsonResult(result);
+    } catch (e) {
+      return errorResult(e instanceof Error ? e.message : '获取设置失败');
+    }
+  });
 
-export function getMcpTools() {
-  return tools.map(({ name, description, parameters, returns }) => ({
-    name,
-    description,
-    inputSchema: parameters,
-    returns,
-  }));
-}
-
-export async function callMcpTool(name: string, params: Record<string, unknown>) {
-  const tool = tools.find((t) => t.name === name);
-  if (!tool) {
-    throw new Error(`未找到工具: ${name}`);
-  }
-  return tool.handler(params);
+  return server;
 }
