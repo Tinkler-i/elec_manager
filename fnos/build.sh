@@ -41,6 +41,36 @@ cp -r public "${SERVER_DIR}/public"
 # 创建数据目录
 mkdir -p "${SERVER_DIR}/data"
 
+# 清理不必要的文件（减小包体积）
+echo "清理不必要的文件..."
+
+# 删除 better-sqlite3 的 C/C++ 源码（运行时只需 .node 二进制）
+find "${SERVER_DIR}" -path "*/better-sqlite3*/deps" -type d -exec rm -rf {} + 2>/dev/null || true
+find "${SERVER_DIR}" -path "*/better-sqlite3*/src" -type d -exec rm -rf {} + 2>/dev/null || true
+find "${SERVER_DIR}" -path "*/better-sqlite3*/build" -type d ! -path "*/Release/*" -exec rm -rf {} + 2>/dev/null || true
+
+# 删除所有包中的文档、测试、配置文件
+find "${SERVER_DIR}" -type f \( \
+    -iname "README*" -o -iname "CHANGELOG*" -o -iname "HISTORY*" \
+    -o -iname "LICENSE*" -o -iname "LICENCE*" \
+    -o -iname "*.md" -o -iname "*.gyp" -o -iname "*.gypi" \
+    -o -iname ".npmignore" -o -iname ".eslintrc*" \
+    -o -iname "Makefile" -o -iname "*.ts" -o -iname "*.map" \
+    -o -iname "test.js" -o -iname "test-*.js" \
+\) -delete 2>/dev/null || true
+
+# 删除 sharp 中非当前平台的原生库
+find "${SERVER_DIR}" -path "*/@img/sharp-win32*" -type d -exec rm -rf {} + 2>/dev/null || true
+find "${SERVER_DIR}" -path "*/@img/sharp-darwin*" -type d -exec rm -rf {} + 2>/dev/null || true
+
+# 删除空目录
+find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
+
+echo "=== 包体积分析 ==="
+du -sh "${SERVER_DIR}"
+echo "--- 前 10 大文件 ---"
+find "${SERVER_DIR}" -type f -exec du -h {} + 2>/dev/null | sort -rh | head -10
+
 # 下载 fnpack 工具（如未安装）
 if ! command -v fnpack &> /dev/null; then
     echo "下载 fnpack 工具..."

@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
@@ -45,6 +45,37 @@ jobs:
 
           # 创建数据目录
           mkdir -p "${SERVER_DIR}/data"
+
+      - name: Clean unnecessary files (reduce size)
+        run: |
+          SERVER_DIR="fnos/App.Native.ElecMeter/app/server"
+
+          # 删除 better-sqlite3 的 C/C++ 源码（运行时只需 .node 二进制）
+          find "${SERVER_DIR}" -path "*/better-sqlite3*/deps" -type d -exec rm -rf {} + 2>/dev/null || true
+          find "${SERVER_DIR}" -path "*/better-sqlite3*/src" -type d -exec rm -rf {} + 2>/dev/null || true
+          find "${SERVER_DIR}" -path "*/better-sqlite3*/build" -type d ! -path "*/Release/*" -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除所有包中的文档、测试、配置文件
+          find "${SERVER_DIR}" -type f \( \
+            -iname "README*" -o -iname "CHANGELOG*" -o -iname "HISTORY*" \
+            -o -iname "LICENSE*" -o -iname "LICENCE*" \
+            -o -iname "*.md" -o -iname "*.gyp" -o -iname "*.gypi" \
+            -o -iname ".npmignore" -o -iname ".eslintrc*" \
+            -o -iname "Makefile" -o -iname "*.ts" -o -iname "*.map" \
+            -o -iname "test.js" -o -iname "test-*.js" \
+          \) -delete 2>/dev/null || true
+
+          # 删除 sharp 中非当前平台的原生库
+          find "${SERVER_DIR}" -path "*/@img/sharp-win32*" -type d -exec rm -rf {} + 2>/dev/null || true
+          find "${SERVER_DIR}" -path "*/@img/sharp-darwin*" -type d -exec rm -rf {} + 2>/dev/null || true
+
+          # 删除空目录
+          find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
+
+          echo "=== 包体积分析 ==="
+          du -sh "${SERVER_DIR}"
+          echo "--- 前 10 大文件 ---"
+          find "${SERVER_DIR}" -type f -exec du -h {} + 2>/dev/null | sort -rh | head -10
 
       - name: Download fnpack & Build fpk
         run: |

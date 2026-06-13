@@ -2,7 +2,7 @@
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 
-export PATH=/var/apps/nodejs_v22/target/bin:$PATH
+export PATH=/usr/local/node/bin:$PATH
 export ELEC_DB_PATH="${TRIM_PKGVAR}/elec.db"
 
 CMD="cd ${TRIM_APPDEST}/server && PORT=16543 ELEC_DB_PATH=${TRIM_PKGVAR}/elec.db node server.js"
