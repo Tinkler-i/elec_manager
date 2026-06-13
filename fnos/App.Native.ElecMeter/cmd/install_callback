@@ -1,4 +1,4 @@
 #!/bin/bash
-export PATH=/usr/local/node/bin:$PATH
-cd "${TRIM_APPDEST}/server" && npm rebuild better-sqlite3 2>/dev/null || true
+# better-sqlite3 已在 fpk 中包含完整的原生二进制，无需 rebuild
+# npm rebuild 会删除已有的 .node 文件导致模块加载失败
 exit 0
