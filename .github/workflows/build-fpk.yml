@@ -56,28 +56,35 @@ jobs:
           echo "=== 清理前体积 ==="
           du -sh "${SERVER_DIR}"
 
-          # 1. better-sqlite3: 只保留编译好的 .node 文件，其余全删
+          # 1. sharp: 删除非当前平台的原生库（runner 是 glibc Ubuntu，不需要 musl）
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-libvips-linuxmusl-x64" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-linuxmusl-x64" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-win32-x64" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-darwin-x64" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-darwin-arm64" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-libvips-darwin-x64" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/@img/sharp-libvips-darwin-arm64" 2>/dev/null || true
+
+          # 2. 删除 Next.js 运行时不需要的大文件
+          rm -f "${SERVER_DIR}/node_modules/next/dist/server/capsize-font-metrics.json" 2>/dev/null || true
+
+          # 3. better-sqlite3: 只保留 .node 和 JS 接口
           for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null); do
-            # 备份 .node 文件
-            find "${bs3dir}" -name "*.node" -exec cp {} /tmp/bs3_node_$(basename ${bs3dir}).node \;
-            # 删除整个包目录
-            rm -rf "${bs3dir}"
-            # 恢复目录结构，只放回 .node
-            mkdir -p "${bs3dir}/build/Release"
-            mv /tmp/bs3_node_$(basename ${bs3dir}).node "${bs3dir}/build/Release/better_sqlite3.node" 2>/dev/null || true
-            # 恢复必须的 JS 文件
-            if [ -d ".next/standalone/node_modules/$(basename ${bs3dir})" ]; then
-              cp .next/standalone/node_modules/$(basename ${bs3dir})/lib/*.js "${bs3dir}/" 2>/dev/null || true
-              cp .next/standalone/node_modules/$(basename ${bs3dir})/package.json "${bs3dir}/" 2>/dev/null || true
-              cp .next/standalone/node_modules/$(basename ${bs3dir})/index.js "${bs3dir}/" 2>/dev/null || true
+            NODE_FILE=$(find "${bs3dir}" -name "*.node" 2>/dev/null | head -1)
+            if [ -n "${NODE_FILE}" ]; then
+              cp "${NODE_FILE}" /tmp/bs3_backup.node
+              rm -rf "${bs3dir}"
+              mkdir -p "${bs3dir}/build/Release" "${bs3dir}/lib"
+              mv /tmp/bs3_backup.node "${bs3dir}/build/Release/better_sqlite3.node"
+              # 恢复 JS 接口文件
+              for f in index.js package.json; do
+                [ -f ".next/standalone/node_modules/better-sqlite3/${f}" ] && cp ".next/standalone/node_modules/better-sqlite3/${f}" "${bs3dir}/"
+              done
+              [ -d ".next/standalone/node_modules/better-sqlite3/lib" ] && cp -r .next/standalone/node_modules/better-sqlite3/lib/* "${bs3dir}/lib/"
             fi
           done
 
-          # 2. 删除非当前平台的 sharp 原生库
-          find "${SERVER_DIR}" -type d -name "sharp-win32*" -exec rm -rf {} + 2>/dev/null || true
-          find "${SERVER_DIR}" -type d -name "sharp-darwin*" -exec rm -rf {} + 2>/dev/null || true
-
-          # 3. 删除所有包中的文档、测试、构建配置、源码映射
+          # 4. 删除所有包中的文档、测试、源码、配置文件
           find "${SERVER_DIR}" -type f \( \
             -iname "README*" -o -iname "CHANGELOG*" -o -iname "HISTORY*" \
             -o -iname "LICENSE*" -o -iname "LICENCE*" -o -iname "NOTICE*" \
@@ -89,7 +96,7 @@ jobs:
             -o -iname "*.spec.js" -o -iname "binding.gyp" \
           \) -delete 2>/dev/null || true
 
-          # 4. 删除空目录
+          # 5. 删除空目录
           find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
 
           echo "=== 清理后体积 ==="
