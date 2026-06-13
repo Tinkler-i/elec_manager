@@ -11,6 +11,7 @@ import {
   Title,
   Tooltip,
   Legend,
+  Filler,
 } from "chart.js";
 import { Reading } from "@/types";
 
@@ -21,40 +22,27 @@ ChartJS.register(
   LineElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler
 );
 
 export function UsageChart() {
   const [readings, setReadings] = useState<Reading[]>([]);
   const [loading, setLoading] = useState(true);
-  const [rate, setRate] = useState(0.56);
 
   useEffect(() => {
     fetchReadings();
-    fetchSettings();
   }, []);
 
   async function fetchReadings() {
     try {
       const response = await fetch("/api/readings");
       const data = await response.json();
-      setReadings(data.slice(0, 12).reverse());
+      setReadings(data.sort((a: Reading, b: Reading) => a.reading_date.localeCompare(b.reading_date)));
     } catch (error) {
       console.error("获取读数失败:", error);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function fetchSettings() {
-    try {
-      const response = await fetch("/api/settings");
-      const data = await response.json();
-      if (data.rate_per_kwh) {
-        setRate(parseFloat(data.rate_per_kwh));
-      }
-    } catch (error) {
-      console.error("获取设置失败:", error);
     }
   }
 
@@ -66,34 +54,54 @@ export function UsageChart() {
     return <div className="text-center py-4 text-gray-500">暂无读数数据</div>;
   }
 
-  const dailyData = readings.reduce((acc, r) => {
+  // Get the last reading of each day
+  const lastReadingOfDay = readings.reduce((acc, r) => {
     const date = r.reading_date;
-    if (!acc[date]) {
-      acc[date] = 0;
+    if (!acc[date] || r.reading_date > acc[date].reading_date) {
+      acc[date] = r;
     }
-    acc[date] += r.units_consumed || 0;
     return acc;
-  }, {} as Record<string, number>);
+  }, {} as Record<string, Reading>);
 
-  const sortedDates = Object.keys(dailyData).sort();
-  const dailyConsumed = sortedDates.map(d => dailyData[d]);
+  // Get last 90 days
+  const today = new Date();
+  const ninetyDaysAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
+
+  const recentDays = Object.entries(lastReadingOfDay)
+    .filter(([date]) => new Date(date) >= ninetyDaysAgo)
+    .map(([date, reading]) => ({ date, reading }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  if (recentDays.length === 0) {
+    return <div className="text-center py-4 text-gray-500">最近90天暂无数据</div>;
+  }
+
+  // Calculate monthly data from daily readings
+  const monthlyData: Record<string, { count: number; total: number }> = {};
+  recentDays.forEach(({ date, reading }) => {
+    const month = date.substring(0, 7);
+    if (!monthlyData[month]) {
+      monthlyData[month] = { count: 0, total: 0 };
+    }
+    monthlyData[month].total += reading.units_consumed || 0;
+    monthlyData[month].count += 1;
+  });
+
+  const months = Object.keys(monthlyData).sort();
+  const monthLabels = months.map(m => `${m.substring(5)}月`);
+  const monthlyAvg = months.map(m => monthlyData[m].total / monthlyData[m].count);
 
   const chartData = {
-    labels: sortedDates,
+    labels: monthLabels,
     datasets: [
       {
-        label: "用电量 (度)",
-        data: dailyConsumed,
+        label: "日均用电 (度)",
+        data: monthlyAvg,
         borderColor: "rgb(59, 130, 246)",
-        backgroundColor: "rgba(59, 130, 246, 0.5)",
+        backgroundColor: "rgba(59, 130, 246, 0.1)",
         tension: 0.3,
-      },
-      {
-        label: "费用 (元)",
-        data: dailyConsumed.map(v => v * rate),
-        borderColor: "rgb(239, 68, 68)",
-        backgroundColor: "rgba(239, 68, 68, 0.5)",
-        tension: 0.3,
+        fill: true,
+        borderWidth: 2,
       },
     ],
   };

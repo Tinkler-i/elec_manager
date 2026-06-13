@@ -15,7 +15,6 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Reading } from "@/types";
 import { Calendar } from "lucide-react";
 
@@ -81,17 +80,22 @@ export function DailyUsageChart() {
     setEndDate(end.toISOString().split("T")[0]);
   }
 
-  const dailyData = readings.reduce((acc, r) => {
+  const lastReadingOfDay = readings.reduce((acc, r) => {
     const date = r.reading_date;
-    if (!acc[date]) {
-      acc[date] = 0;
+    if (!acc[date] || r.reading_date > acc[date].reading_date) {
+      acc[date] = r;
     }
-    acc[date] += r.units_consumed || 0;
+    return acc;
+  }, {} as Record<string, Reading>);
+
+  const dailyData = Object.entries(lastReadingOfDay).reduce((acc, [date, reading]) => {
+    acc[date] = reading.units_consumed || 0;
     return acc;
   }, {} as Record<string, number>);
 
   const sortedDates = Object.keys(dailyData).sort();
   const dailyConsumed = sortedDates.map(d => dailyData[d]);
+  const maxUsage = Math.max(...dailyConsumed);
 
   const chartData = {
     labels: sortedDates,
@@ -103,20 +107,14 @@ export function DailyUsageChart() {
         backgroundColor: "rgba(59, 130, 246, 0.5)",
         tension: 0.3,
         fill: true,
-      },
-      {
-        label: "日费用 (元)",
-        data: dailyConsumed.map(v => v * rate),
-        borderColor: "rgb(239, 68, 68)",
-        backgroundColor: "rgba(239, 68, 68, 0.3)",
-        tension: 0.3,
-        fill: true,
+        yAxisID: "y",
       },
     ],
   };
 
   const options = {
     responsive: true,
+    maintainAspectRatio: false,
     interaction: {
       intersect: false,
       mode: "index" as const,
@@ -125,10 +123,50 @@ export function DailyUsageChart() {
       legend: {
         position: "top" as const,
       },
+      tooltip: {
+        callbacks: {
+          label: function(context: { dataset: { label?: string }; parsed: { y: number | null }; dataIndex: number }) {
+            const usage = context.parsed.y;
+            const cost = (usage * rate).toFixed(2);
+            return `用电: ${usage.toFixed(1)} 度 | 电费: ¥${cost}`;
+          },
+        },
+      },
     },
     scales: {
+      x: {
+        ticks: {
+          maxRotation: 45,
+          minRotation: 45,
+          maxTicksLimit: 20,
+        },
+        grid: {
+          display: false,
+        },
+      },
       y: {
+        type: "linear" as const,
+        display: true,
+        position: "left" as const,
+        title: {
+          display: true,
+          text: "用电量 (度)",
+        },
         beginAtZero: true,
+      },
+      y1: {
+        type: "linear" as const,
+        display: true,
+        position: "right" as const,
+        beginAtZero: true,
+        max: Math.ceil(maxUsage * rate),
+        title: {
+          display: true,
+          text: "电费 (元)",
+        },
+        grid: {
+          drawOnChartArea: false,
+        },
       },
     },
   };

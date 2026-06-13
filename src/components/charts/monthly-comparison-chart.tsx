@@ -64,44 +64,94 @@ export function MonthlyComparisonChart() {
     return <div className="text-center py-4 text-gray-500">暂无读数数据</div>;
   }
 
-  const monthlyData = readings.reduce((acc, r) => {
+  const lastReadingOfMonth = readings.reduce((acc, r) => {
     const month = r.reading_date.substring(0, 7);
-    if (!acc[month]) {
-      acc[month] = { consumed: 0, cost: 0 };
+    if (!acc[month] || r.reading_date > acc[month].reading_date) {
+      acc[month] = r;
     }
-    acc[month].consumed += r.units_consumed || 0;
-    acc[month].cost += (r.units_consumed || 0) * rate;
     return acc;
-  }, {} as Record<string, { consumed: number; cost: number }>);
+  }, {} as Record<string, Reading>);
 
-  const months = Object.keys(monthlyData).sort().slice(-6);
+  const sortedMonths = Object.keys(lastReadingOfMonth).sort();
+  
+  const monthlyData: Record<string, number> = {};
+  sortedMonths.forEach((month, index) => {
+    const currentReading = lastReadingOfMonth[month];
+    const prevReading = index > 0 ? lastReadingOfMonth[sortedMonths[index - 1]] : null;
+    
+    const consumed = prevReading 
+      ? currentReading.reading_value - prevReading.reading_value
+      : currentReading.reading_value - (currentReading.previous_reading || 0);
+    
+    monthlyData[month] = Math.max(0, consumed);
+  });
+
+  const months = sortedMonths.slice(-6);
+  const maxUsage = Math.max(...months.map(m => monthlyData[m]));
 
   const chartData = {
-    labels: months,
+    labels: months.map(m => `${m.substring(5)}月`),
     datasets: [
       {
         label: "用电量 (度)",
-        data: months.map(m => monthlyData[m].consumed),
+        data: months.map(m => monthlyData[m]),
         backgroundColor: "rgba(59, 130, 246, 0.7)",
-      },
-      {
-        label: "费用 (元)",
-        data: months.map(m => monthlyData[m].cost),
-        backgroundColor: "rgba(239, 68, 68, 0.7)",
+        borderColor: "rgb(59, 130, 246)",
+        borderWidth: 1,
+        yAxisID: "y",
       },
     ],
   };
 
   const options = {
     responsive: true,
+    interaction: {
+      mode: "index" as const,
+      intersect: false,
+    },
     plugins: {
       legend: {
         position: "top" as const,
       },
+      tooltip: {
+        callbacks: {
+          label: function(context: { dataset: { label?: string }; parsed: { y: number | null }; dataIndex: number }) {
+            const usage = context.parsed.y;
+            const cost = (usage * rate).toFixed(2);
+            return `用电: ${usage.toFixed(1)} 度 | 电费: ¥${cost}`;
+          },
+        },
+      },
     },
     scales: {
+      x: {
+        grid: {
+          display: false,
+        },
+      },
       y: {
+        type: "linear" as const,
+        display: true,
+        position: "left" as const,
+        title: {
+          display: true,
+          text: "用电量 (度)",
+        },
         beginAtZero: true,
+      },
+      y1: {
+        type: "linear" as const,
+        display: true,
+        position: "right" as const,
+        title: {
+          display: true,
+          text: "电费 (元)",
+        },
+        beginAtZero: true,
+        max: Math.ceil(maxUsage * rate),
+        grid: {
+          drawOnChartArea: false,
+        },
       },
     },
   };
