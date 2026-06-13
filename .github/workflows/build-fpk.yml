@@ -57,14 +57,31 @@ jobs:
         run: |
           SERVER_DIR="fnos/App.Native.ElecMeter/app/server"
 
+          # better-sqlite3: 替换哈希模块名
           BS3_HASH_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
           if [ -n "${BS3_HASH_NAME}" ]; then
             echo "Replacing ${BS3_HASH_NAME} -> better-sqlite3"
             find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
           fi
+
+          # @modelcontextprotocol/sdk: 替换哈希模块名
+          MCP_HASH_NAME=$(grep -roh '@modelcontextprotocol/sdk-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
+          if [ -n "${MCP_HASH_NAME}" ]; then
+            echo "Replacing ${MCP_HASH_NAME} -> @modelcontextprotocol/sdk"
+            find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s|${MCP_HASH_NAME}|@modelcontextprotocol/sdk|g" {} + 2>/dev/null || true
+          fi
+
           rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
           rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
           cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
+
+          # 复制 @modelcontextprotocol/sdk（serverExternalPackages，standalone 不包含）
+          if [ -d "node_modules/@modelcontextprotocol" ]; then
+            echo "Copying @modelcontextprotocol/sdk"
+            mkdir -p "${SERVER_DIR}/node_modules/@modelcontextprotocol"
+            rm -rf "${SERVER_DIR}/node_modules/@modelcontextprotocol/sdk" 2>/dev/null || true
+            cp -r node_modules/@modelcontextprotocol/sdk "${SERVER_DIR}/node_modules/@modelcontextprotocol/sdk"
+          fi
 
           ARCH="${{ matrix.arch }}"
           if [ "$ARCH" = "amd64" ]; then
