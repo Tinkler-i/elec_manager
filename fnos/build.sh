@@ -54,22 +54,18 @@ for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null
     rm -f "${bs3dir}/binding.gyp" 2>/dev/null || true
 done
 
-# 2. 处理 .next/node_modules 中的 better-sqlite3 哈希目录
-# Next.js Turbopack 编译时将 better-sqlite3 解析为 better-sqlite3-<hash>
-# fnpack 无法处理 .next/node_modules 下的该目录（copy_file_range bug）
-# 解决方案：将编译产物中的哈希模块名替换为标准名，并删除 .next/node_modules
-if [ -d "${SERVER_DIR}/.next/node_modules" ]; then
-    BS3_HASH_DIR=$(find "${SERVER_DIR}/.next/node_modules" -maxdepth 1 -type d -name "better-sqlite3-*" 2>/dev/null | head -1)
-    if [ -n "${BS3_HASH_DIR}" ]; then
-        BS3_HASH_NAME=$(basename "${BS3_HASH_DIR}")
-        echo "  发现哈希模块: ${BS3_HASH_NAME}"
-        echo "  替换编译产物中的模块名 ${BS3_HASH_NAME} → better-sqlite3"
-        # 在 .next/server/ 中替换所有引用（.js 和 .json 文件）
-        find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
-    fi
-    # 删除 .next/node_modules（规避 fnpack copy_file_range bug）
-    rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+# 2. 替换 Next.js Turbopack 编译产物中的 better-sqlite3 哈希模块名
+# Turbopack 将 serverExternalPackages 中的模块命名为 <pkg>-<hash>
+# 运行时 require('better-sqlite3-<hash>') 无法解析，需替换为标准名
+# 直接从编译产物中 grep 出哈希名，不依赖 .next/node_modules 存在
+BS3_HASH_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
+if [ -n "${BS3_HASH_NAME}" ]; then
+    echo "  发现哈希模块名: ${BS3_HASH_NAME}"
+    echo "  替换编译产物中的模块名 ${BS3_HASH_NAME} → better-sqlite3"
+    find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
 fi
+# 删除 .next/node_modules（规避 fnpack copy_file_range bug）
+rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
 # 确保 node_modules/better-sqlite3 存在且完整（含 .node 原生二进制）
 if [ -d "node_modules/better-sqlite3" ]; then
     echo "  从项目 node_modules 复制完整 better-sqlite3（含原生二进制）"

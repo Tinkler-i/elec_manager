@@ -58,13 +58,10 @@ jobs:
           echo "=== 清理前体积 ==="
           du -sh "${SERVER_DIR}"
 
-          # 1. 处理 .next/node_modules 中的 better-sqlite3 哈希目录
-          # Next.js Turbopack 编译时将 better-sqlite3 解析为 better-sqlite3-<hash>
-          # fnpack 无法处理 .next/node_modules 下的该目录（copy_file_range bug）
-          # 解决方案：将编译产物中的哈希模块名替换为标准名，并删除 .next/node_modules
-          BS3_HASH_DIR=$(find "${SERVER_DIR}/.next/node_modules" -maxdepth 1 -type d -name "better-sqlite3-*" 2>/dev/null | head -1)
-          if [ -n "${BS3_HASH_DIR}" ]; then
-            BS3_HASH_NAME=$(basename "${BS3_HASH_DIR}")
+          # 1. 替换 Next.js Turbopack 编译产物中的 better-sqlite3 哈希模块名
+          # 直接从编译产物中 grep 出哈希名，不依赖 .next/node_modules 存在
+          BS3_HASH_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
+          if [ -n "${BS3_HASH_NAME}" ]; then
             echo "Replacing ${BS3_HASH_NAME} -> better-sqlite3 in server chunks"
             find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
           fi
