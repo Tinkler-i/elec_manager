@@ -28,12 +28,12 @@ echo "准备应用文件..."
 rm -rf "${SERVER_DIR}"
 mkdir -p "${SERVER_DIR}"
 
-# 复制 standalone 构建产物
-cp -r .next/standalone/* "${SERVER_DIR}/"
+# 复制 standalone 构建产物（包括隐藏目录如 .next）
+cp -r .next/standalone/. "${SERVER_DIR}/"
 
 # 复制 static 资源
 mkdir -p "${SERVER_DIR}/.next/static"
-cp -r .next/static/* "${SERVER_DIR}/.next/static/"
+cp -r .next/static/. "${SERVER_DIR}/.next/static/"
 
 # 复制 public 资源
 cp -r public "${SERVER_DIR}/public"
@@ -46,19 +46,12 @@ echo "清理不必要的文件..."
 echo "=== 清理前体积 ==="
 du -sh "${SERVER_DIR}"
 
-# 1. better-sqlite3: 只保留编译好的 .node 文件和 JS 接口
+# 1. better-sqlite3: 只删除 C/C++ 源码和构建文件，保留运行时必要文件
 for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null); do
-    find "${bs3dir}" -name "*.node" -exec cp {} /tmp/bs3_node_$(basename ${bs3dir}).node \;
-    rm -rf "${bs3dir}"
-    mkdir -p "${bs3dir}/build/Release"
-    mv /tmp/bs3_node_$(basename ${bs3dir}).node "${bs3dir}/build/Release/better_sqlite3.node" 2>/dev/null || true
-    SRC_DIR=".next/standalone/node_modules/$(basename ${bs3dir})"
-    if [ -d "${SRC_DIR}" ]; then
-        mkdir -p "${bs3dir}/lib"
-        cp "${SRC_DIR}"/lib/*.js "${bs3dir}/lib/" 2>/dev/null || true
-        cp "${SRC_DIR}"/package.json "${bs3dir}/" 2>/dev/null || true
-        cp "${SRC_DIR}"/index.js "${bs3dir}/" 2>/dev/null || true
-    fi
+    rm -rf "${bs3dir}/deps" 2>/dev/null || true
+    rm -rf "${bs3dir}/src" 2>/dev/null || true
+    rm -rf "${bs3dir}/build/Release/obj" 2>/dev/null || true
+    rm -f "${bs3dir}/binding.gyp" 2>/dev/null || true
 done
 
 # 2. 删除非当前平台的 sharp 原生库
