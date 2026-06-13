@@ -54,8 +54,18 @@ for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null
     rm -f "${bs3dir}/binding.gyp" 2>/dev/null || true
 done
 
-# 2. 删除 .next/node_modules 中的 better-sqlite3 哈希目录（fnpack copy_file_range bug）
-rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+# 2. 处理 .next/node_modules 中的 better-sqlite3 哈希目录
+# fnpack 的 copy_file_range 无法处理该目录，需要先移到 node_modules 再删除
+if [ -d "${SERVER_DIR}/.next/node_modules" ]; then
+    for bs3dir in "${SERVER_DIR}/.next/node_modules"/better-sqlite3-*; do
+        if [ -d "${bs3dir}" ]; then
+            echo "  迁移 $(basename ${bs3dir}) → node_modules/better-sqlite3"
+            rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
+            mv "${bs3dir}" "${SERVER_DIR}/node_modules/better-sqlite3"
+        fi
+    done
+    rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+fi
 
 # 3. 删除非当前平台的 sharp 原生库
 find "${SERVER_DIR}" -type d -name "sharp-win32*" -exec rm -rf {} + 2>/dev/null || true
