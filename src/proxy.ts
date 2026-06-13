@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 
-// 无需认证的路径
 const PUBLIC_PATHS = [
   '/login',
   '/api/auth/login',
@@ -13,7 +12,6 @@ function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'));
 }
 
-// 安全响应头
 function addSecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('X-Frame-Options', 'DENY');
@@ -22,11 +20,6 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
-/**
- * 获取 JWT Secret（从 process.env 读取）
- * auth.ts 在首次调用时会自动生成并写入 process.env.JWT_SECRET
- * middleware 在 Edge Runtime 运行，通过 process.env 读取（Node.js runtime 共享）
- */
 function getJwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
@@ -35,10 +28,9 @@ function getJwtSecret(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // 静态资源和公开路径直接放行
   if (
     isPublicPath(pathname) ||
     pathname.startsWith('/_next') ||
@@ -48,7 +40,6 @@ export async function middleware(request: NextRequest) {
     return addSecurityHeaders(response);
   }
 
-  // 获取 token（优先 header，其次 cookie）
   const headerToken = request.headers.get('authorization')?.replace('Bearer ', '') || '';
   const cookieToken = request.cookies.get('auth_token')?.value || '';
   const token = headerToken || cookieToken;
