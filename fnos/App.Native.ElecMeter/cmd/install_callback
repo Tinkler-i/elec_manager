@@ -1,4 +1,4 @@
 #!/bin/bash
-export PATH=/var/apps/nodejs_v22/target/bin:$PATH
-cd "${TRIM_APPDEST}/server" && npm rebuild better-sqlite3 2>/dev/null
+export PATH=/usr/local/node/bin:$PATH
+cd "${TRIM_APPDEST}/server" && npm rebuild better-sqlite3 2>/dev/null || true
 exit 0
