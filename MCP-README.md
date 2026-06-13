@@ -1,133 +1,118 @@
 # 电表管理系统 MCP 接入指南
 
-本项目实现了标准的 MCP (Model Context Protocol) 服务器，可以让 AI 助手（如 Claude Desktop、Cursor 等）直接读写电表数据。
+本项目实现了标准 MCP (Model Context Protocol) 服务器，支持 Streamable HTTP 和 Stdio 两种传输方式。
 
-## 快速开始
+## 方式一：Streamable HTTP（推荐）
 
-### 第一步：启动电表系统
+适用于已部署的电表系统，客户端通过 HTTP 连接。
 
-```bash
-cd D:\Code\AI\Elec\elec
-npm run dev
-```
+### 配置示例
 
-确保 http://localhost:16543 可以访问。
-
-### 第二步：获取登录 Token
-
-1. 打开 http://localhost:3000/login
-2. 输入默认密码 `admin` 登录
-3. 登录后，打开浏览器开发者工具（F12）
-4. 在 Application → Cookies 中找到 `auth_token` 的值
-5. 复制这个 token 值备用
-
-### 第三步：配置 AI 客户端
-
-#### Claude Desktop
-
-编辑配置文件：
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-
-添加以下配置：
+**Claude Desktop** (`claude_desktop_config.json`)：
 
 ```json
 {
   "mcpServers": {
     "elec-meter": {
-      "command": "npx",
-      "args": ["tsx", "D:/Code/AI/Elec/elec/mcp-server.ts"],
-      "env": {
-        "ELEC_API_URL": "http://localhost:3000",
-        "ELEC_AUTH_TOKEN": "你的登录token"
+      "url": "http://your-server:16543/api/mcp",
+      "headers": {
+        "Authorization": "Bearer 你的token"
       }
     }
   }
 }
 ```
 
-#### Cursor
+### 获取 Token
 
-在项目根目录创建 `.cursor/mcp.json`：
+1. 登录电表系统（默认密码 `admin`）
+2. 进入 MCP 页面（`/mcp`）查看完整配置
+3. 复制 Token
+
+## 方式二：Stdio
+
+适用于本地开发，客户端直接启动 MCP 进程，直连数据库。
+
+### 配置示例
+
+**Claude Desktop** (`claude_desktop_config.json`)：
 
 ```json
 {
   "mcpServers": {
     "elec-meter": {
       "command": "npx",
-      "args": ["tsx", "D:/Code/AI/Elec/elec/mcp-server.ts"],
+      "args": ["tsx", "path/to/elec_manager/mcp-server.ts"],
       "env": {
-        "ELEC_API_URL": "http://localhost:3000"
+        "ELEC_DB_PATH": "path/to/data/elec.db"
       }
     }
   }
 }
 ```
 
-### 第三步：重启 AI 客户端
+**Cursor** (`.cursor/mcp.json`)：
 
-配置完成后重启 Claude Desktop 或 Cursor，AI 就能自动识别电表工具了。
+```json
+{
+  "mcpServers": {
+    "elec-meter": {
+      "command": "npx",
+      "args": ["tsx", "path/to/elec_manager/mcp-server.ts"],
+      "env": {
+        "ELEC_DB_PATH": "path/to/data/elec.db"
+      }
+    }
+  }
+}
+```
+
+> Stdio 模式直连数据库，无需 token 认证，适合本地开发使用。
 
 ## 可用工具
 
-AI 可以使用以下工具操作电表数据：
-
 | 工具 | 说明 | 示例对话 |
 |------|------|----------|
-| 添加读数 | 记录电表读数 | "帮我记录今天电表读数是 1250" |
-| 获取读数 | 查询读数记录 | "查一下上个月的读数" |
-| 用电统计 | 获取用电概览 | "本月用了多少电？" |
-| 审计日志 | 查看操作记录 | "看看AI都做过哪些操作" |
-| 导出数据 | 导出读数 | "导出所有读数数据" |
-| 备份数据库 | 创建备份 | "备份一下数据库" |
-| 获取设置 | 查看配置 | "现在电价是多少？" |
+| `add_reading` | 记录电表读数 | "帮我记录今天电表读数是 1250" |
+| `list_readings` | 查询读数记录 | "查一下上个月的读数" |
+| `get_statistics` | 获取用电统计 | "本月用了多少电？" |
+| `export_readings` | 导出数据 | "导出所有读数数据" |
+| `create_backup` | 创建备份 | "备份一下数据库" |
+| `get_settings` | 查看配置 | "现在电价是多少？" |
 
-## AI 对话示例
+## 对话示例
 
 ```
 用户：帮我查一下这个月用了多少电
-AI：[调用"用电统计"工具]
+AI：[调用 get_statistics]
 AI：本月用电 150 度，费用 84 元，累计用电 1200 度。
 
 用户：记录今天电表读数 1350
-AI：[调用"添加读数"工具]
+AI：[调用 add_reading]
 AI：已记录，本次用电 100 度。
 
 用户：上个月用了多少？
-AI：[调用"获取读数"工具，筛选上月日期]
+AI：[调用 list_readings，筛选上月日期]
 AI：上个月共读数 5 次，用电 180 度，费用 100.8 元。
 ```
 
 ## 环境变量
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `ELEC_API_URL` | 电表系统地址 | http://localhost:16543 |
-| `ELEC_AUTH_TOKEN` | 登录认证token | 空（需要先登录获取） |
-| `JWT_SECRET` | JWT密钥 | elec-meter-secret-key-change-in-production |
-
-```
-AI 客户端 (Claude Desktop / Cursor)
-        │
-        │ stdio (JSON-RPC)
-        ▼
-MCP 服务器 (mcp-server.ts)
-        │
-        │ HTTP API
-        ▼
-电表系统 (localhost:3000)
-        │
-        ▼
-SQLite 数据库
-```
+| 变量 | 说明 | 适用模式 |
+|------|------|----------|
+| `ELEC_DB_PATH` | 数据库文件路径 | Stdio |
+| `Authorization` | Bearer Token 认证头 | Streamable HTTP |
 
 ## 常见问题
 
 **Q: AI 没有识别到工具？**
 A: 检查配置文件路径是否正确，重启 AI 客户端。
 
-**Q: 调用工具报错？**
-A: 确保电表系统已启动（npm run dev）。
+**Q: Stdio 模式报错？**
+A: 确保 `ELEC_DB_PATH` 指向正确的数据库文件，且已安装 `tsx`。
+
+**Q: HTTP 模式认证失败？**
+A: 检查 Token 是否正确，Token 可在系统 MCP 页面获取。
 
 **Q: 可以远程访问吗？**
-A: 将 `ELEC_API_URL` 改为服务器地址即可。
+A: Streamable HTTP 模式天然支持远程访问，只需配置正确的服务器地址。

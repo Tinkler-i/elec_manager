@@ -20,10 +20,20 @@
 # production
 /build
 
+# data & database
+/data/
+jwt_secret
+
+# fnOS build output (recreated by build.sh)
+fnos/App.Native.ElecMeter/app/server/
+fnos/fnpack.exe
+fnpack-*-windows-amd64
+
 # misc
 .DS_Store
 *.pem
-jwt_secret
+*.zip
+.mimocode/
 
 # debug
 npm-debug.log*

@@ -1,30 +1,25 @@
 # 电表数据管理系统
 
-支持 MCP (Model Context Protocol) 的电表数据管理系统，可让 AI 助手直接读写电表数据。
+支持标准 MCP (Model Context Protocol) 协议的电表数据管理系统，可让 AI 助手直接读写电表数据。
 
 ## 功能特性
 
 - **读数记录** - 手动输入电表读数，支持初始读数配置
 - **数据可视化** - 日用电量、月度趋势、用电统计图表
-- **MCP 集成** - AI 助手可通过 MCP 协议读写数据
-- **用户认证** - 密码保护，365天自动登录
+- **标准 MCP** - 支持 Streamable HTTP 和 Stdio 两种传输方式
+- **安全认证** - JWT 自动管理、登录速率限制、安全响应头
 - **数据导出** - CSV 格式导出读数数据
-- **数据备份** - 一键备份数据库
-- **Docker 部署** - 支持容器化部署
+- **数据备份** - 一键备份和恢复数据库
+- **多平台部署** - Docker / 飞牛 fnOS / Node.js 直接运行
 
 ## 快速开始
 
 ### 本地开发
 
 ```bash
-# 克隆项目
 git clone https://github.com/Tinkler-i/elec_manager.git
 cd elec_manager
-
-# 安装依赖
 npm install
-
-# 启动开发服务器
 npm run dev
 ```
 
@@ -33,7 +28,7 @@ npm run dev
 ### Docker 部署
 
 ```bash
-# 构建并启动
+# 使用 docker compose
 docker compose up -d
 
 # 或单独构建
@@ -41,11 +36,48 @@ docker build -t elec-meter .
 docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 ```
 
+### 飞牛 fnOS
+
+在 `fnos/` 目录下执行 `build.sh` 构建 fpk 安装包，上传到飞牛设备安装即可。
+
+### Node.js 直接运行
+
+```bash
+npm run build
+cd .next/standalone
+node server.js
+```
+
+## 安全特性
+
+| 特性 | 说明 |
+|------|------|
+| JWT 自动管理 | 首次启动自动生成密钥，持久化存储，重启不失效 |
+| 登录速率限制 | 同一 IP 15 分钟内最多 10 次尝试 |
+| 安全响应头 | X-Frame-Options、X-Content-Type-Options 等 |
+| 输入验证 | 读数值、日期格式、密码长度校验 |
+| 设置白名单 | 敏感配置项（如密码）不可通过 API 修改 |
+
 ## MCP 接入
 
-### Claude Desktop 配置
+### 方式一：Streamable HTTP（推荐）
 
-编辑 `%APPDATA%\Claude\claude_desktop_config.json`：
+适用于 Claude Desktop、Cursor 等支持 MCP 的客户端。
+
+```json
+{
+  "mcpServers": {
+    "elec-meter": {
+      "url": "http://your-server:16543/api/mcp",
+      "headers": {
+        "Authorization": "Bearer 你的token"
+      }
+    }
+  }
+}
+```
+
+### 方式二：Stdio
 
 ```json
 {
@@ -54,8 +86,7 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
       "command": "npx",
       "args": ["tsx", "path/to/mcp-server.ts"],
       "env": {
-        "ELEC_API_URL": "http://your-server:16543",
-        "ELEC_AUTH_TOKEN": "你的token"
+        "ELEC_DB_PATH": "/path/to/data/elec.db"
       }
     }
   }
@@ -65,27 +96,56 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 ### 获取 Token
 
 1. 登录系统
-2. 访问 `/mcp` 页面
+2. 访问 `/mcp` 页面查看配置说明
 3. 复制 Token
 
-### 可用工具
+### MCP 工具列表
 
 | 工具 | 说明 |
 |------|------|
-| 添加读数 | 记录电表读数 |
-| 获取读数 | 查询读数记录 |
-| 用电统计 | 获取用电概览 |
-| 导出数据 | 导出读数数据 |
-| 备份数据库 | 创建数据备份 |
-| 获取设置 | 查看配置信息 |
+| `add_reading` | 记录电表读数 |
+| `list_readings` | 查询读数记录 |
+| `get_statistics` | 获取用电统计概览 |
+| `export_readings` | 导出读数数据（CSV） |
+| `create_backup` | 创建数据库备份 |
+| `get_settings` | 查看系统配置 |
+
+## 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `JWT_SECRET` | JWT 密钥 | 自动生成并持久化 |
+| `ELEC_DB_PATH` | 数据库路径 | `data/elec.db` |
+| `PORT` | 服务端口 | `16543` |
+| `HOSTNAME` | 绑定地址 | `0.0.0.0` |
+
+## API 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/auth/login | 登录 |
+| POST | /api/auth/logout | 登出 |
+| GET | /api/auth/check | 检查认证状态 |
+| PUT | /api/auth/password | 修改密码 |
+| GET/POST | /api/auth/token | 获取/刷新 Token |
+| GET | /api/stats | 统计数据 |
+| GET/POST | /api/readings | 读数列表/添加读数 |
+| GET/PUT/DELETE | /api/readings/[id] | 读数详情 |
+| PUT | /api/readings/recalculate | 重新计算用电量 |
+| GET/PUT | /api/settings | 设置管理 |
+| GET/POST | /api/backup | 备份管理 |
+| DELETE | /api/backup | 删除备份 |
+| GET | /api/export | 数据导出（CSV） |
+| POST/GET/DELETE | /api/mcp | MCP Streamable HTTP 端点 |
+| GET | /api/mcp/tools | MCP 工具元数据 |
 
 ## 技术栈
 
-- **前端**: Next.js 16 + React + TypeScript + Tailwind CSS
-- **UI 组件**: shadcn/ui
+- **前端**: Next.js 16 + React 19 + TypeScript + Tailwind CSS
+- **UI**: shadcn/ui + Lucide Icons
 - **图表**: Chart.js + react-chartjs-2
-- **数据库**: SQLite + better-sqlite3
-- **认证**: JWT + bcryptjs
+- **数据库**: SQLite (better-sqlite3)
+- **认证**: JWT (jsonwebtoken + jose) + bcryptjs
 - **MCP**: @modelcontextprotocol/sdk
 
 ## 项目结构
@@ -93,35 +153,16 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 ```
 elec/
 ├── src/
-│   ├── app/           # Next.js 页面和 API
-│   ├── components/    # React 组件
-│   ├── lib/           # 工具函数和数据库
-│   └── types/         # TypeScript 类型
-├── data/              # SQLite 数据库
-├── mcp-server.ts      # MCP 服务器
-├── Dockerfile         # Docker 构建文件
-└── docker-compose.yml # Docker Compose 配置
+│   ├── app/              # Next.js 页面和 API 路由
+│   ├── components/       # React 组件（图表、UI）
+│   ├── lib/              # 工具函数、数据库、MCP
+│   ├── types/            # TypeScript 类型定义
+│   └── middleware.ts      # 全局认证中间件
+├── mcp-server.ts         # MCP Stdio 服务器
+├── fnos/                 # 飞牛 fnOS 应用配置
+├── Dockerfile            # Docker 构建
+└── docker-compose.yml    # Docker Compose 配置
 ```
-
-## 环境变量
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `JWT_SECRET` | JWT 密钥 | 需要修改 |
-| `ELEC_API_URL` | 服务地址 | http://localhost:16543 |
-| `ELEC_AUTH_TOKEN` | 认证 Token | 登录后获取 |
-
-## API 接口
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | /api/stats | 获取统计数据 |
-| GET/POST | /api/readings | 读数列表/添加读数 |
-| GET/PUT/DELETE | /api/readings/[id] | 读数详情 |
-| GET/PUT | /api/settings | 设置管理 |
-| GET/POST | /api/backup | 备份管理 |
-| GET | /api/export | 数据导出 |
-| POST | /api/mcp | MCP 工具调用 |
 
 ## License
 
