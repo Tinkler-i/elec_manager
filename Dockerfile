@@ -1,36 +1,23 @@
-FROM registry.cn-hangzhou.aliyuncs.com/library/node:20-alpine AS base
-
-FROM base AS deps
-WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production && cp -R node_modules /tmp/prod_modules
-RUN npm ci
-
-FROM base AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-RUN npm run build
-
-FROM base AS runner
-WORKDIR /app
+FROM registry.cn-hangzhou.aliyuncs.com/library/node:20-alpine
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs && \
+    apk add --no-cache dumb-init
 
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+WORKDIR /app
 
+COPY .next/standalone ./
+COPY .next/static ./.next/static
+COPY public ./public
 RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
 
 USER nextjs
 
 EXPOSE 3000
 ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
 
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]
