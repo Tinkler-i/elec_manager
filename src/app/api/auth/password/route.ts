@@ -6,8 +6,16 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { password } = body;
 
-    if (!password || password.length < 4) {
-      return NextResponse.json({ error: '密码至少需要4位' }, { status: 400 });
+    if (!password || typeof password !== 'string') {
+      return NextResponse.json({ error: '请输入有效密码' }, { status: 400 });
+    }
+
+    if (password.length < 6) {
+      return NextResponse.json({ error: '密码至少需要 6 位' }, { status: 400 });
+    }
+
+    if (password.length > 128) {
+      return NextResponse.json({ error: '密码不能超过 128 位' }, { status: 400 });
     }
 
     changePassword(password);

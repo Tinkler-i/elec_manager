@@ -78,7 +78,7 @@ export default function LoginPage() {
             </Button>
           </form>
           <p className="text-center text-sm text-gray-500 mt-4">
-            默认密码：admin
+            忘记密码请联系管理员
           </p>
         </CardContent>
       </Card>

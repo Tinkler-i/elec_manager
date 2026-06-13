@@ -2,7 +2,15 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { getDb } from './db';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'elec-meter-secret-key-change-in-production';
+const DEFAULT_SECRET = 'elec-meter-secret-key-change-in-production';
+
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET || DEFAULT_SECRET;
+  if (process.env.NODE_ENV === 'production' && secret === DEFAULT_SECRET) {
+    throw new Error('生产环境必须设置 JWT_SECRET 环境变量，不能使用默认值');
+  }
+  return secret;
+}
 const TOKEN_EXPIRY = '365d';
 
 export interface User {
@@ -37,12 +45,12 @@ export function changePassword(newPassword: string) {
 }
 
 export function generateToken(): string {
-  return jwt.sign({ auth: true }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
+  return jwt.sign({ auth: true }, getJwtSecret(), { expiresIn: TOKEN_EXPIRY });
 }
 
 export function verifyToken(token: string): boolean {
   try {
-    jwt.verify(token, JWT_SECRET);
+    jwt.verify(token, getJwtSecret());
     return true;
   } catch {
     return false;

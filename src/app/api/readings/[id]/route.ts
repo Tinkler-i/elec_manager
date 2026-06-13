@@ -46,6 +46,14 @@ export async function PUT(
       return NextResponse.json({ error: '读数不存在' }, { status: 404 });
     }
 
+    // 输入验证
+    if (typeof reading_value !== 'number' || !isFinite(reading_value) || reading_value < 0) {
+      return NextResponse.json({ error: '读数值必须是有效的非负数' }, { status: 400 });
+    }
+    if (typeof reading_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(reading_date)) {
+      return NextResponse.json({ error: '日期格式不正确，应为 YYYY-MM-DD' }, { status: 400 });
+    }
+
     const prevReading = db.prepare(
       'SELECT reading_value FROM readings WHERE reading_date < ? AND id != ? ORDER BY reading_date DESC LIMIT 1'
     ).get(reading_date, id) as { reading_value: number } | undefined;

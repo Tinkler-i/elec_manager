@@ -42,6 +42,24 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { reading_value, reading_date, notes, source = 'manual', created_by = 'user' } = body;
 
+    // 输入验证
+    if (typeof reading_value !== 'number' || !isFinite(reading_value) || reading_value < 0) {
+      return NextResponse.json({ error: '读数值必须是有效的非负数' }, { status: 400 });
+    }
+    if (typeof reading_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(reading_date)) {
+      return NextResponse.json({ error: '日期格式不正确，应为 YYYY-MM-DD' }, { status: 400 });
+    }
+    if (notes !== undefined && notes !== null && typeof notes !== 'string') {
+      return NextResponse.json({ error: '备注必须是字符串' }, { status: 400 });
+    }
+    if (typeof notes === 'string' && notes.length > 500) {
+      return NextResponse.json({ error: '备注过长' }, { status: 400 });
+    }
+    const validSources = ['manual', 'mcp', 'import'];
+    if (!validSources.includes(source)) {
+      return NextResponse.json({ error: '无效的 source 值' }, { status: 400 });
+    }
+
     const prevReading = db.prepare(
       'SELECT reading_value FROM readings WHERE reading_date < ? ORDER BY reading_date DESC LIMIT 1'
     ).get(reading_date) as { reading_value: number } | undefined;
