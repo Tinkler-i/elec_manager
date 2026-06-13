@@ -8,9 +8,6 @@ services:
       - elec-data:/app/data
     environment:
       - NODE_ENV=production
-      # 重要：生产环境必须设置 JWT_SECRET，否则每次重启 token 会失效
-      # 生成方式: openssl rand -base64 32
-      - JWT_SECRET=${JWT_SECRET:-}
     restart: unless-stopped
     deploy:
       resources:

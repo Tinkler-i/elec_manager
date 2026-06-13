@@ -1,17 +1,54 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { getDb } from './db';
 
-const DEFAULT_SECRET = 'elec-meter-secret-key-change-in-production';
-
-function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET || DEFAULT_SECRET;
-  if (process.env.NODE_ENV === 'production' && secret === DEFAULT_SECRET) {
-    throw new Error('生产环境必须设置 JWT_SECRET 环境变量，不能使用默认值');
-  }
-  return secret;
-}
 const TOKEN_EXPIRY = '365d';
+
+/**
+ * 获取 JWT Secret
+ * 优先级：环境变量 JWT_SECRET > 持久化文件 > 自动生成
+ * 密钥存储在数据库同目录下的 jwt_secret 文件，确保重启/升级后仍有效
+ */
+function getJwtSecret(): string {
+  // 1. 环境变量优先
+  if (process.env.JWT_SECRET) {
+    return process.env.JWT_SECRET;
+  }
+
+  // 2. 密钥文件路径：与数据库同目录
+  const dbPath = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
+  const secretFile = path.join(path.dirname(dbPath), 'jwt_secret');
+
+  try {
+    if (fs.existsSync(secretFile)) {
+      const stored = fs.readFileSync(secretFile, 'utf-8').trim();
+      if (stored) {
+        process.env.JWT_SECRET = stored;
+        return stored;
+      }
+    }
+  } catch {
+    // 文件读取失败，继续生成
+  }
+
+  // 3. 自动生成并持久化
+  const generated = crypto.randomBytes(48).toString('base64');
+  try {
+    const dir = path.dirname(secretFile);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(secretFile, generated, { mode: 0o600 });
+  } catch {
+    console.warn('无法持久化 JWT_SECRET，重启后 token 将失效。请设置 JWT_SECRET 环境变量。');
+  }
+
+  process.env.JWT_SECRET = generated;
+  return generated;
+}
 
 export interface User {
   username: string;

@@ -1,16 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 
-const DEFAULT_SECRET = 'elec-meter-secret-key-change-in-production';
-
-function getJwtSecret(): Uint8Array {
-  const secret = process.env.JWT_SECRET || DEFAULT_SECRET;
-  if (process.env.NODE_ENV === 'production' && secret === DEFAULT_SECRET) {
-    throw new Error('生产环境必须设置 JWT_SECRET 环境变量');
-  }
-  return new TextEncoder().encode(secret);
-}
-
 // 无需认证的路径
 const PUBLIC_PATHS = [
   '/login',
@@ -32,6 +22,19 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
+/**
+ * 获取 JWT Secret（从 process.env 读取）
+ * auth.ts 在首次调用时会自动生成并写入 process.env.JWT_SECRET
+ * middleware 在 Edge Runtime 运行，通过 process.env 读取（Node.js runtime 共享）
+ */
+function getJwtSecret(): Uint8Array {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET 未初始化');
+  }
+  return new TextEncoder().encode(secret);
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -51,12 +54,10 @@ export async function middleware(request: NextRequest) {
   const token = headerToken || cookieToken;
 
   if (!token) {
-    // API 路由返回 401
     if (pathname.startsWith('/api/')) {
       const response = NextResponse.json({ error: '未授权，请先登录' }, { status: 401 });
       return addSecurityHeaders(response);
     }
-    // 页面路由重定向到登录
     const response = NextResponse.redirect(new URL('/login', request.url));
     return addSecurityHeaders(response);
   }
@@ -66,7 +67,6 @@ export async function middleware(request: NextRequest) {
     const response = NextResponse.next();
     return addSecurityHeaders(response);
   } catch {
-    // Token 无效
     if (pathname.startsWith('/api/')) {
       const response = NextResponse.json({ error: '未授权，token 已失效' }, { status: 401 });
       return addSecurityHeaders(response);

@@ -20,8 +20,5 @@ EXPOSE 16543
 ENV PORT=16543
 ENV HOSTNAME="0.0.0.0"
 
-# 启动脚本：自动生成 JWT_SECRET（如果未设置）
-RUN printf '#!/bin/sh\nif [ -z "$JWT_SECRET" ]; then\n  export JWT_SECRET=$(head -c 32 /dev/urandom | base64)\n  echo "WARNING: JWT_SECRET auto-generated. Set it as env var for persistence."\nfi\nexec "$@"\n' > /app/entrypoint.sh && chmod +x /app/entrypoint.sh
-
-ENTRYPOINT ["dumb-init", "--", "/app/entrypoint.sh"]
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]
