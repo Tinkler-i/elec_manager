@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM registry.cn-hangzhou.aliyuncs.com/library/node:20-alpine AS base
 
 FROM base AS deps
 WORKDIR /app
