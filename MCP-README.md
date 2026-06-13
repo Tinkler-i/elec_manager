@@ -11,7 +11,7 @@ cd D:\Code\AI\Elec\elec
 npm run dev
 ```
 
-确保 http://localhost:3000 可以访问。
+确保 http://localhost:16543 可以访问。
 
 ### 第二步：获取登录 Token
 
@@ -102,7 +102,7 @@ AI：上个月共读数 5 次，用电 180 度，费用 100.8 元。
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `ELEC_API_URL` | 电表系统地址 | http://localhost:3000 |
+| `ELEC_API_URL` | 电表系统地址 | http://localhost:16543 |
 | `ELEC_AUTH_TOKEN` | 登录认证token | 空（需要先登录获取） |
 | `JWT_SECRET` | JWT密钥 | elec-meter-secret-key-change-in-production |
 

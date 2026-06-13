@@ -16,8 +16,8 @@ RUN mkdir -p /app/data && chown nextjs:nodejs /app/data
 
 USER nextjs
 
-EXPOSE 3000
-ENV PORT=3000
+EXPOSE 16543
+ENV PORT=16543
 
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "server.js"]

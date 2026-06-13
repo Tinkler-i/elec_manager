@@ -3,7 +3,7 @@ services:
     build: .
     container_name: elec-meter
     ports:
-      - "3000:3000"
+      - "16543:16543"
     volumes:
       - elec-data:/app/data
     environment:

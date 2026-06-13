@@ -28,7 +28,7 @@ npm install
 npm run dev
 ```
 
-访问 http://localhost:3000，默认密码：`admin`
+访问 http://localhost:16543，默认密码：`admin`
 
 ### Docker 部署
 
@@ -38,7 +38,7 @@ docker compose up -d
 
 # 或单独构建
 docker build -t elec-meter .
-docker run -d -p 3000:3000 -v elec-data:/app/data elec-meter
+docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 ```
 
 ## MCP 接入
@@ -54,7 +54,7 @@ docker run -d -p 3000:3000 -v elec-data:/app/data elec-meter
       "command": "npx",
       "args": ["tsx", "path/to/mcp-server.ts"],
       "env": {
-        "ELEC_API_URL": "http://your-server:3000",
+        "ELEC_API_URL": "http://your-server:16543",
         "ELEC_AUTH_TOKEN": "你的token"
       }
     }
@@ -108,7 +108,7 @@ elec/
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `JWT_SECRET` | JWT 密钥 | 需要修改 |
-| `ELEC_API_URL` | 服务地址 | http://localhost:3000 |
+| `ELEC_API_URL` | 服务地址 | http://localhost:16543 |
 | `ELEC_AUTH_TOKEN` | 认证 Token | 登录后获取 |
 
 ## API 接口

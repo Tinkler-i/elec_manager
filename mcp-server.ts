@@ -9,7 +9,7 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
-const API_BASE = process.env.ELEC_API_URL || "http://localhost:3000";
+const API_BASE = process.env.ELEC_API_URL || "http://localhost:16543";
 const AUTH_TOKEN = process.env.ELEC_AUTH_TOKEN || "";
 
 async function apiGet(path: string) {
