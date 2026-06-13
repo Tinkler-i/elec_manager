@@ -55,12 +55,17 @@ for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null
 done
 
 # 2. 处理 .next/node_modules 中的 better-sqlite3 哈希目录
-# fnpack 的 copy_file_range 无法处理该目录，直接删除并从项目 node_modules 复制完整版本
-rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
-rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
-if [ -d "node_modules/better-sqlite3" ]; then
-    echo "  从项目 node_modules 复制 better-sqlite3"
-    cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
+# Next.js Turbopack 编译时将 better-sqlite3 解析为 better-sqlite3-<hash>
+# fnpack 无法处理 .next/node_modules 下的该目录（copy_file_range bug）
+# 解决方案：从 .next/node_modules/ 移到 node_modules/，保留哈希名称
+if [ -d "${SERVER_DIR}/.next/node_modules" ]; then
+    BS3_HASH_DIR=$(find "${SERVER_DIR}/.next/node_modules" -maxdepth 1 -type d -name "better-sqlite3-*" 2>/dev/null | head -1)
+    if [ -n "${BS3_HASH_DIR}" ]; then
+        BS3_HASH_NAME=$(basename "${BS3_HASH_DIR}")
+        echo "  迁移 ${BS3_HASH_NAME} → node_modules/"
+        mv "${BS3_HASH_DIR}" "${SERVER_DIR}/node_modules/${BS3_HASH_NAME}"
+    fi
+    rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
 fi
 
 # 3. 删除非当前平台的 sharp 原生库
