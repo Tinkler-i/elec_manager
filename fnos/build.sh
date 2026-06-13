@@ -14,9 +14,13 @@ if ! command -v node &> /dev/null; then
 fi
 echo "Node.js 版本: $(node -v)"
 
+# 安装依赖
+echo "安装项目依赖..."
+cd "${APP_DIR}/.."
+npm install
+
 # 构建 Next.js 项目
 echo "构建 Next.js 项目..."
-cd "${APP_DIR}/.."
 npm run build
 
 # 清理并创建 server 目录
