@@ -43,33 +43,49 @@ mkdir -p "${SERVER_DIR}/data"
 
 # 清理不必要的文件（减小包体积）
 echo "清理不必要的文件..."
+echo "=== 清理前体积 ==="
+du -sh "${SERVER_DIR}"
 
-# 删除 better-sqlite3 的 C/C++ 源码（运行时只需 .node 二进制）
-find "${SERVER_DIR}" -path "*/better-sqlite3*/deps" -type d -exec rm -rf {} + 2>/dev/null || true
-find "${SERVER_DIR}" -path "*/better-sqlite3*/src" -type d -exec rm -rf {} + 2>/dev/null || true
-find "${SERVER_DIR}" -path "*/better-sqlite3*/build" -type d ! -path "*/Release/*" -exec rm -rf {} + 2>/dev/null || true
+# 1. better-sqlite3: 只保留编译好的 .node 文件和 JS 接口
+for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null); do
+    find "${bs3dir}" -name "*.node" -exec cp {} /tmp/bs3_node_$(basename ${bs3dir}).node \;
+    rm -rf "${bs3dir}"
+    mkdir -p "${bs3dir}/build/Release"
+    mv /tmp/bs3_node_$(basename ${bs3dir}).node "${bs3dir}/build/Release/better_sqlite3.node" 2>/dev/null || true
+    SRC_DIR=".next/standalone/node_modules/$(basename ${bs3dir})"
+    if [ -d "${SRC_DIR}" ]; then
+        mkdir -p "${bs3dir}/lib"
+        cp "${SRC_DIR}"/lib/*.js "${bs3dir}/lib/" 2>/dev/null || true
+        cp "${SRC_DIR}"/package.json "${bs3dir}/" 2>/dev/null || true
+        cp "${SRC_DIR}"/index.js "${bs3dir}/" 2>/dev/null || true
+    fi
+done
 
-# 删除所有包中的文档、测试、配置文件
+# 2. 删除非当前平台的 sharp 原生库
+find "${SERVER_DIR}" -type d -name "sharp-win32*" -exec rm -rf {} + 2>/dev/null || true
+find "${SERVER_DIR}" -type d -name "sharp-darwin*" -exec rm -rf {} + 2>/dev/null || true
+
+# 3. 删除所有包中的文档、测试、构建配置、源码映射
 find "${SERVER_DIR}" -type f \( \
     -iname "README*" -o -iname "CHANGELOG*" -o -iname "HISTORY*" \
-    -o -iname "LICENSE*" -o -iname "LICENCE*" \
+    -o -iname "LICENSE*" -o -iname "LICENCE*" -o -iname "NOTICE*" \
     -o -iname "*.md" -o -iname "*.gyp" -o -iname "*.gypi" \
-    -o -iname ".npmignore" -o -iname ".eslintrc*" \
+    -o -iname ".npmignore" -o -iname ".eslintrc*" -o -iname ".prettierrc*" \
     -o -iname "Makefile" -o -iname "*.ts" -o -iname "*.map" \
-    -o -iname "test.js" -o -iname "test-*.js" \
+    -o -iname "*.c" -o -iname "*.cc" -o -iname "*.cpp" -o -iname "*.h" -o -iname "*.hpp" \
+    -o -iname "test.js" -o -iname "test-*.js" -o -iname "*.test.js" \
+    -o -iname "*.spec.js" -o -iname "binding.gyp" \
 \) -delete 2>/dev/null || true
 
-# 删除 sharp 中非当前平台的原生库
-find "${SERVER_DIR}" -path "*/@img/sharp-win32*" -type d -exec rm -rf {} + 2>/dev/null || true
-find "${SERVER_DIR}" -path "*/@img/sharp-darwin*" -type d -exec rm -rf {} + 2>/dev/null || true
-
-# 删除空目录
+# 4. 删除空目录
 find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
 
-echo "=== 包体积分析 ==="
+echo "=== 清理后体积 ==="
 du -sh "${SERVER_DIR}"
-echo "--- 前 10 大文件 ---"
-find "${SERVER_DIR}" -type f -exec du -h {} + 2>/dev/null | sort -rh | head -10
+echo "--- 各子目录体积 ---"
+du -sh "${SERVER_DIR}"/*/ "${SERVER_DIR}"/.* 2>/dev/null | sort -rh | head -20
+echo "--- 前 15 大文件 ---"
+find "${SERVER_DIR}" -type f -exec du -h {} + 2>/dev/null | sort -rh | head -15
 
 # 下载 fnpack 工具（如未安装）
 if ! command -v fnpack &> /dev/null; then
