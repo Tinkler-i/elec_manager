@@ -127,6 +127,7 @@ export function DailyUsageChart() {
         callbacks: {
           label: function(context: { dataset: { label?: string }; parsed: { y: number | null }; dataIndex: number }) {
             const usage = context.parsed.y;
+            if (usage === null) return "";
             const cost = (usage * rate).toFixed(2);
             return `用电: ${usage.toFixed(1)} 度 | 电费: ¥${cost}`;
           },
