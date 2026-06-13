@@ -95,7 +95,7 @@ function errorResult(message: string) {
 export function createMcpServer(): McpServer {
   const server = new McpServer({
     name: 'elec-meter',
-    version: '1.1.0',
+    version: '1.2.0',
   });
 
   // ── 添加读数 ──────────────────────────────────────────────────────────
