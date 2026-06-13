@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-fpk:
+  build:
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -20,9 +20,6 @@ jobs:
             fnpack_arch: linux-arm64
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    permissions:
-      contents: write
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,23 +53,19 @@ jobs:
 
           mkdir -p "${SERVER_DIR}/data"
 
-      - name: Clean unnecessary files (reduce size)
+      - name: Clean unnecessary files
         run: |
           SERVER_DIR="fnos/App.Native.ElecMeter/app/server"
 
-          echo "=== 清理前体积 ==="
-          du -sh "${SERVER_DIR}"
-
           BS3_HASH_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
           if [ -n "${BS3_HASH_NAME}" ]; then
-            echo "Replacing ${BS3_HASH_NAME} -> better-sqlite3 in server chunks"
+            echo "Replacing ${BS3_HASH_NAME} -> better-sqlite3"
             find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
           fi
           rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
           rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
           cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
 
-          # sharp: 只保留当前架构的原生库
           ARCH="${{ matrix.arch }}"
           if [ "$ARCH" = "amd64" ]; then
             KEEP_PLATFORMS="linux-x64"
@@ -99,7 +92,7 @@ jobs:
 
           find "${SERVER_DIR}" -type f \( \
             -iname "README*" -o -iname "CHANGELOG*" -o -iname "HISTORY*" \
-            -iname "LICENSE*" -o -iname "LICENCE*" -o -iname "NOTICE*" \
+            -o -iname "LICENSE*" -o -iname "LICENCE*" -o -iname "NOTICE*" \
             -o -iname "*.md" -o -iname "*.gyp" -o -iname "*.gypi" \
             -o -iname ".npmignore" -o -iname ".eslintrc*" -o -iname ".prettierrc*" \
             -o -iname "Makefile" -o -iname "*.ts" -o -iname "*.map" \
@@ -109,9 +102,6 @@ jobs:
           \) -delete 2>/dev/null || true
 
           find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
-
-          echo "=== 清理后体积 ==="
-          du -sh "${SERVER_DIR}"
 
       - name: Download fnpack & Build fpk
         run: |
@@ -123,24 +113,45 @@ jobs:
           cd fnos/App.Native.ElecMeter
           ../fnpack build
 
-      - name: Rename fpk with version and arch
+      - name: Rename fpk
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          [ -z "$VERSION" ] && VERSION="dev"
           ARCH="${{ matrix.arch }}"
           SRC="fnos/App.Native.ElecMeter/App.Native.ElecMeter.fpk"
           DST="fnos/App.Native.ElecMeter/elec-meter-v${VERSION}-${ARCH}.fpk"
           mv "$SRC" "$DST"
+          echo "=== 产物 ==="
+          ls -lh "$DST"
 
-      - name: Upload fpk artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: elec-meter-${{ github.ref_name }}-${{ matrix.arch }}
+          name: fpk-${{ matrix.arch }}
           path: fnos/App.Native.ElecMeter/elec-meter-*.fpk
 
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List files
+        run: |
+          echo "=== 下载的文件 ==="
+          find artifacts -type f -exec ls -lh {} \;
+
       - name: Create Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: fnos/App.Native.ElecMeter/elec-meter-*.fpk
+          generate_release_notes: true
+          files: artifacts/elec-meter-*.fpk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
