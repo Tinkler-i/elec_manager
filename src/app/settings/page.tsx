@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Download, Database } from "lucide-react";
+import { Download, Database, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 export default function SettingsPage() {
@@ -97,6 +97,29 @@ export default function SettingsPage() {
 
   function handleDownloadBackup(fileName: string) {
     window.open(`/api/backup?file=${encodeURIComponent(fileName)}`, "_blank");
+  }
+
+  async function handleDeleteBackup(fileName: string) {
+    try {
+      const response = await fetch(`/api/backup?file=${encodeURIComponent(fileName)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("删除失败");
+      toast.success("备份已删除");
+      fetchBackups();
+    } catch (error) {
+      toast.error("删除备份失败");
+    }
+  }
+
+  async function handleDeleteAllBackups() {
+    if (!confirm("确定要删除所有历史备份吗？")) return;
+    try {
+      const response = await fetch("/api/backup?all=true", { method: "DELETE" });
+      if (!response.ok) throw new Error("删除失败");
+      toast.success("所有备份已删除");
+      fetchBackups();
+    } catch (error) {
+      toast.error("删除备份失败");
+    }
   }
 
   function handleExport(type: string) {
@@ -228,7 +251,18 @@ export default function SettingsPage() {
 
           {backups.length > 0 && (
             <div className="space-y-2">
-              <Label>历史备份</Label>
+              <div className="flex items-center justify-between">
+                <Label>历史备份</Label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDeleteAllBackups}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="w-4 h-4 mr-1" />
+                  删除全部
+                </Button>
+              </div>
               <div className="text-sm space-y-1">
                 {backups.map((backup) => (
                   <div key={backup.name} className="flex items-center justify-between p-2 bg-gray-50 rounded">
@@ -238,13 +272,23 @@ export default function SettingsPage() {
                         {(backup.size / 1024).toFixed(1)} KB · {new Date(backup.created).toLocaleString("zh-CN")}
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDownloadBackup(backup.name)}
-                    >
-                      <Download className="w-4 h-4" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDownloadBackup(backup.name)}
+                      >
+                        <Download className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteBackup(backup.name)}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>

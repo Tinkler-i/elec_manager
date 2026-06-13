@@ -26,6 +26,41 @@ export async function POST() {
   }
 }
 
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const fileName = searchParams.get('file');
+    const deleteAll = searchParams.get('all') === 'true';
+    const backupDir = path.join(process.cwd(), 'data', 'backups');
+
+    if (deleteAll) {
+      if (fs.existsSync(backupDir)) {
+        const files = fs.readdirSync(backupDir).filter(file => file.endsWith('.db'));
+        for (const file of files) {
+          fs.unlinkSync(path.join(backupDir, file));
+        }
+      }
+      return NextResponse.json({ message: '所有备份已删除' });
+    }
+
+    if (!fileName) {
+      return NextResponse.json({ error: '未指定文件名' }, { status: 400 });
+    }
+
+    const safeName = path.basename(fileName);
+    const filePath = path.join(backupDir, safeName);
+
+    if (!safeName.endsWith('.db') || !fs.existsSync(filePath)) {
+      return NextResponse.json({ error: '备份文件不存在' }, { status: 404 });
+    }
+
+    fs.unlinkSync(filePath);
+    return NextResponse.json({ message: '备份已删除' });
+  } catch (error) {
+    return NextResponse.json({ error: '删除备份失败' }, { status: 500 });
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
