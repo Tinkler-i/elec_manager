@@ -11,6 +11,7 @@
 - **数据导出** - CSV 格式导出读数数据
 - **数据备份** - 一键备份和恢复数据库
 - **多平台部署** - Docker / 飞牛 fnOS / Node.js 直接运行
+- **双架构支持** - amd64 / arm64 自动构建
 
 ## 快速开始
 
@@ -38,7 +39,16 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 
 ### 飞牛 fnOS
 
-在 `fnos/` 目录下执行 `build.sh` 构建 fpk 安装包，上传到飞牛设备安装即可。
+从 [Releases](https://github.com/Tinkler-i/elec_manager/releases) 下载对应架构的 fpk 文件，在飞牛设备的应用中心手动安装。
+
+文件命名格式：`elec-meter-v{版本}-{架构}.fpk`（如 `elec-meter-v1.0.0-amd64.fpk`）。
+
+也可在本地构建：
+
+```bash
+cd fnos
+./build.sh
+```
 
 ### Node.js 直接运行
 
@@ -147,6 +157,7 @@ node server.js
 - **数据库**: SQLite (better-sqlite3)
 - **认证**: JWT (jsonwebtoken + jose) + bcryptjs
 - **MCP**: @modelcontextprotocol/sdk
+- **CI/CD**: GitHub Actions（双架构自动构建 amd64/arm64）
 
 ## 项目结构
 
@@ -157,7 +168,7 @@ elec/
 │   ├── components/       # React 组件（图表、UI）
 │   ├── lib/              # 工具函数、数据库、MCP
 │   ├── types/            # TypeScript 类型定义
-│   └── middleware.ts      # 全局认证中间件
+│   └── proxy.ts          # 全局认证代理（Next.js 16）
 ├── mcp-server.ts         # MCP Stdio 服务器
 ├── fnos/                 # 飞牛 fnOS 应用配置
 ├── Dockerfile            # Docker 构建
