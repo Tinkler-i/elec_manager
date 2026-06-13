@@ -66,13 +66,12 @@ jobs:
           if [ -n "${BS3_HASH_DIR}" ]; then
             BS3_HASH_NAME=$(basename "${BS3_HASH_DIR}")
             echo "Replacing ${BS3_HASH_NAME} -> better-sqlite3 in server chunks"
-            find "${SERVER_DIR}/.next/server" -type f -name '*.js' -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
+            find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
           fi
           rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
-          # 确保 node_modules/better-sqlite3 存在
-          if [ ! -d "${SERVER_DIR}/node_modules/better-sqlite3" ]; then
-            cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
-          fi
+          # 确保 node_modules/better-sqlite3 存在且完整（含 .node 原生二进制）
+          rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
+          cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
 
           # 2. sharp: 删除非当前平台的原生库（runner 是 glibc Ubuntu，不需要 musl）
           rm -rf "${SERVER_DIR}/node_modules/@img/sharp-libvips-linuxmusl-x64" 2>/dev/null || true
