@@ -54,11 +54,19 @@ for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null
     rm -f "${bs3dir}/binding.gyp" 2>/dev/null || true
 done
 
-# 2. 删除非当前平台的 sharp 原生库
+# 2. 删除 .next/node_modules 中的 better-sqlite3 哈希目录（fnpack copy_file_range bug）
+rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+
+# 3. 删除非当前平台的 sharp 原生库
 find "${SERVER_DIR}" -type d -name "sharp-win32*" -exec rm -rf {} + 2>/dev/null || true
 find "${SERVER_DIR}" -type d -name "sharp-darwin*" -exec rm -rf {} + 2>/dev/null || true
+find "${SERVER_DIR}" -type d -name "sharp-libvips-linuxmusl*" -exec rm -rf {} + 2>/dev/null || true
+find "${SERVER_DIR}" -type d -name "sharp-linuxmusl*" -exec rm -rf {} + 2>/dev/null || true
 
-# 3. 删除所有包中的文档、测试、构建配置、源码映射
+# 4. 删除 Next.js 运行时不需要的大文件
+rm -f "${SERVER_DIR}/node_modules/next/dist/server/capsize-font-metrics.json" 2>/dev/null || true
+
+# 5. 删除所有包中的文档、测试、构建配置、源码映射
 find "${SERVER_DIR}" -type f \( \
     -iname "README*" -o -iname "CHANGELOG*" -o -iname "HISTORY*" \
     -o -iname "LICENSE*" -o -iname "LICENCE*" -o -iname "NOTICE*" \
@@ -70,7 +78,7 @@ find "${SERVER_DIR}" -type f \( \
     -o -iname "*.spec.js" -o -iname "binding.gyp" \
 \) -delete 2>/dev/null || true
 
-# 4. 删除空目录
+# 6. 删除空目录
 find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
 
 echo "=== 清理后体积 ==="

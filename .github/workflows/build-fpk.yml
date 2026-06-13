@@ -58,7 +58,10 @@ jobs:
           echo "=== 清理前体积 ==="
           du -sh "${SERVER_DIR}"
 
-          # 1. sharp: 删除非当前平台的原生库（runner 是 glibc Ubuntu，不需要 musl）
+          # 1. 删除 .next/node_modules 中的 better-sqlite3 哈希目录（fnpack copy_file_range bug）
+          rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+
+          # 2. sharp: 删除非当前平台的原生库（runner 是 glibc Ubuntu，不需要 musl）
           rm -rf "${SERVER_DIR}/node_modules/@img/sharp-libvips-linuxmusl-x64" 2>/dev/null || true
           rm -rf "${SERVER_DIR}/node_modules/@img/sharp-linuxmusl-x64" 2>/dev/null || true
           rm -rf "${SERVER_DIR}/node_modules/@img/sharp-win32-x64" 2>/dev/null || true
