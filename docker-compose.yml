@@ -1,0 +1,20 @@
+services:
+  elec:
+    build: .
+    container_name: elec-meter
+    ports:
+      - "3000:3000"
+    volumes:
+      - elec-data:/app/data
+    environment:
+      - NODE_ENV=production
+      - ELEC_API_URL=http://localhost:3000
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+volumes:
+  elec-data:
