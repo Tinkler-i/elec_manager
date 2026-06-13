@@ -54,15 +54,22 @@ for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null
     rm -f "${bs3dir}/binding.gyp" 2>/dev/null || true
 done
 
-# 2. 替换 Next.js Turbopack 编译产物中的 better-sqlite3 哈希模块名
+# 2. 替换 Next.js Turbopack 编译产物中的 serverExternalPackages 哈希模块名
 # Turbopack 将 serverExternalPackages 中的模块命名为 <pkg>-<hash>
-# 运行时 require('better-sqlite3-<hash>') 无法解析，需替换为标准名
+# 运行时 require('<pkg>-<hash>') 无法解析，需替换为标准名
 # 直接从编译产物中 grep 出哈希名，不依赖 .next/node_modules 存在
 BS3_HASH_NAME=$(grep -roh 'better-sqlite3-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
 if [ -n "${BS3_HASH_NAME}" ]; then
     echo "  发现哈希模块名: ${BS3_HASH_NAME}"
     echo "  替换编译产物中的模块名 ${BS3_HASH_NAME} → better-sqlite3"
     find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s/${BS3_HASH_NAME}/better-sqlite3/g" {} + 2>/dev/null || true
+fi
+# 同样处理 @modelcontextprotocol/sdk
+MCP_HASH_NAME=$(grep -roh '@modelcontextprotocol/sdk-[a-f0-9]\{16,\}' "${SERVER_DIR}/.next/server/" 2>/dev/null | sort -u | head -1)
+if [ -n "${MCP_HASH_NAME}" ]; then
+    echo "  发现哈希模块名: ${MCP_HASH_NAME}"
+    echo "  替换编译产物中的模块名 ${MCP_HASH_NAME} → @modelcontextprotocol/sdk"
+    find "${SERVER_DIR}/.next/server" -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s|${MCP_HASH_NAME}|@modelcontextprotocol/sdk|g" {} + 2>/dev/null || true
 fi
 # 删除 .next/node_modules（规避 fnpack copy_file_range bug）
 rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
@@ -71,6 +78,14 @@ if [ -d "node_modules/better-sqlite3" ]; then
     echo "  从项目 node_modules 复制完整 better-sqlite3（含原生二进制）"
     rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
     cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
+fi
+
+# 复制 @modelcontextprotocol/sdk（serverExternalPackages，standalone 不包含）
+if [ -d "node_modules/@modelcontextprotocol" ]; then
+    echo "  复制 @modelcontextprotocol/sdk"
+    mkdir -p "${SERVER_DIR}/node_modules/@modelcontextprotocol"
+    rm -rf "${SERVER_DIR}/node_modules/@modelcontextprotocol/sdk" 2>/dev/null || true
+    cp -r node_modules/@modelcontextprotocol/sdk "${SERVER_DIR}/node_modules/@modelcontextprotocol/sdk"
 fi
 
 # 3. 删除非当前平台的 sharp 原生库
