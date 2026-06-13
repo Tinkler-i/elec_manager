@@ -55,16 +55,12 @@ for bs3dir in $(find "${SERVER_DIR}" -type d -name "better-sqlite3*" 2>/dev/null
 done
 
 # 2. 处理 .next/node_modules 中的 better-sqlite3 哈希目录
-# fnpack 的 copy_file_range 无法处理该目录，需要先移到 node_modules 再删除
-if [ -d "${SERVER_DIR}/.next/node_modules" ]; then
-    for bs3dir in "${SERVER_DIR}/.next/node_modules"/better-sqlite3-*; do
-        if [ -d "${bs3dir}" ]; then
-            echo "  迁移 $(basename ${bs3dir}) → node_modules/better-sqlite3"
-            rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
-            mv "${bs3dir}" "${SERVER_DIR}/node_modules/better-sqlite3"
-        fi
-    done
-    rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+# fnpack 的 copy_file_range 无法处理该目录，直接删除并从项目 node_modules 复制完整版本
+rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
+if [ -d "node_modules/better-sqlite3" ]; then
+    echo "  从项目 node_modules 复制 better-sqlite3"
+    cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
 fi
 
 # 3. 删除非当前平台的 sharp 原生库

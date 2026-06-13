@@ -59,16 +59,10 @@ jobs:
           du -sh "${SERVER_DIR}"
 
           # 1. 处理 .next/node_modules 中的 better-sqlite3 哈希目录
-          # fnpack 的 copy_file_range 无法处理该目录，需要先移到 node_modules 再删除
-          if [ -d "${SERVER_DIR}/.next/node_modules" ]; then
-            for bs3dir in "${SERVER_DIR}/.next/node_modules"/better-sqlite3-*; do
-              if [ -d "${bs3dir}" ]; then
-                rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
-                mv "${bs3dir}" "${SERVER_DIR}/node_modules/better-sqlite3"
-              fi
-            done
-            rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
-          fi
+          # fnpack 的 copy_file_range 无法处理该目录，直接删除并从项目 node_modules 复制完整版本
+          rm -rf "${SERVER_DIR}/.next/node_modules" 2>/dev/null || true
+          rm -rf "${SERVER_DIR}/node_modules/better-sqlite3" 2>/dev/null || true
+          cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
 
           # 2. sharp: 删除非当前平台的原生库（runner 是 glibc Ubuntu，不需要 musl）
           rm -rf "${SERVER_DIR}/node_modules/@img/sharp-libvips-linuxmusl-x64" 2>/dev/null || true
