@@ -30,6 +30,8 @@ export async function POST(request: NextRequest) {
 
     return response;
   } catch (error) {
-    return NextResponse.json({ error: '登录失败' }, { status: 500 });
+    console.error('Login error:', error);
+    const message = error instanceof Error ? error.message : '未知错误';
+    return NextResponse.json({ error: `登录失败: ${message}` }, { status: 500 });
   }
 }

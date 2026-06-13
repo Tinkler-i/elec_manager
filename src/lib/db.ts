@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 
-const DB_PATH = path.join(process.cwd(), 'data', 'elec.db');
+const DB_PATH = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
 
 let db: Database.Database | null = null;
 let cachedRate: number | null = null;

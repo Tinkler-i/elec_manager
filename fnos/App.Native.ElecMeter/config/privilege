@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "App.Native.ElecMeter",
+    "groupname": "App.Native.ElecMeter"
+}

@@ -1,0 +1,3 @@
+{
+  "/api/readings/recalculate/route": "app/api/readings/recalculate/route.js"
+}
