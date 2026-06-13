@@ -5,7 +5,7 @@ PID_FILE="${TRIM_PKGVAR}/app.pid"
 export PATH=/usr/local/node/bin:$PATH
 export ELEC_DB_PATH="${TRIM_PKGVAR}/elec.db"
 
-CMD="cd ${TRIM_APPDEST}/server && PORT=16543 ELEC_DB_PATH=${TRIM_PKGVAR}/elec.db node server.js"
+CMD="cd ${TRIM_APPDEST}/server && NODE_ENV=production PORT=16543 ELEC_DB_PATH=${TRIM_PKGVAR}/elec.db node server.js"
 
 log_msg() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> ${LOG_FILE}
