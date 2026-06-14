@@ -9,7 +9,7 @@ export async function POST() {
     const initialSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('initial_reading') as { value: string } | undefined;
     const initialReading = initialSetting ? parseFloat(initialSetting.value) : 0;
 
-    const allReadings = db.prepare('SELECT id, reading_value, reading_date FROM readings ORDER BY reading_date ASC').all() as Reading[];
+    const allReadings = db.prepare('SELECT id, reading_value, reading_date, reading_time FROM readings ORDER BY reading_date ASC, reading_time ASC').all() as Reading[];
 
     if (allReadings.length === 0) {
       return NextResponse.json({ message: '没有读数记录需要重算' });

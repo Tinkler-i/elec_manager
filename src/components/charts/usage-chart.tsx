@@ -57,42 +57,78 @@ export function UsageChart() {
   // Get the last reading of each day
   const lastReadingOfDay = readings.reduce((acc, r) => {
     const date = r.reading_date;
-    if (!acc[date] || r.reading_date > acc[date].reading_date) {
+    if (!acc[date] || (r.reading_time ?? '') > (acc[date].reading_time ?? '')) {
       acc[date] = r;
     }
     return acc;
   }, {} as Record<string, Reading>);
 
-  // Get last 90 days
-  const today = new Date();
-  const ninetyDaysAgo = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
-
-  const recentDays = Object.entries(lastReadingOfDay)
-    .filter(([date]) => new Date(date) >= ninetyDaysAgo)
+  const sortedEntries = Object.entries(lastReadingOfDay)
     .map(([date, reading]) => ({ date, reading }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  if (recentDays.length === 0) {
-    return <div className="text-center py-4 text-gray-500">最近90天暂无数据</div>;
+  if (sortedEntries.length === 0) {
+    return <div className="text-center py-4 text-gray-500">暂无读数数据</div>;
   }
 
-  // Calculate monthly data from daily readings
-  const monthlyData: Record<string, { count: number; total: number }> = {};
-  recentDays.forEach(({ date, reading }) => {
-    const month = date.substring(0, 7);
-    if (!monthlyData[month]) {
-      monthlyData[month] = { count: 0, total: 0 };
-    }
-    monthlyData[month].total += reading.units_consumed || 0;
-    monthlyData[month].count += 1;
-  });
+  // Interpolate reading value at a given date (linear between adjacent readings)
+  // For dates before the first reading, returns null (unknown)
+  function interpolateAtDate(targetDate: string): number | null {
+    if (sortedEntries.length === 0) return null;
+    if (targetDate < sortedEntries[0].date) return null;
+    if (targetDate >= sortedEntries[sortedEntries.length - 1].date) return sortedEntries[sortedEntries.length - 1].reading.reading_value;
 
-  const months = Object.keys(monthlyData).sort();
-  const monthLabels = months.map(m => `${m.substring(5)}月`);
-  const monthlyAvg = months.map(m => monthlyData[m].total / monthlyData[m].count);
+    for (let i = 0; i < sortedEntries.length - 1; i++) {
+      const a = sortedEntries[i];
+      const b = sortedEntries[i + 1];
+      if (targetDate >= a.date && targetDate <= b.date) {
+        if (a.date === b.date) return a.reading.reading_value;
+        const tA = new Date(a.date).getTime();
+        const tB = new Date(b.date).getTime();
+        const tTarget = new Date(targetDate).getTime();
+        const ratio = (tTarget - tA) / (tB - tA);
+        return a.reading.reading_value + (b.reading.reading_value - a.reading.reading_value) * ratio;
+      }
+    }
+    return null;
+  }
+
+  // Determine which months have data
+  const allMonths = new Set<string>();
+  sortedEntries.forEach(e => allMonths.add(e.date.substring(0, 7)));
+  const sortedMonths = Array.from(allMonths).sort();
+
+  // Calculate daily average per month using boundary interpolation
+  const monthlyData: Record<string, { dailyAvg: number; totalConsumed: number; days: number }> = {};
+  for (const month of sortedMonths) {
+    const [y, m] = month.split('-').map(Number);
+    const firstDay = `${month}-01`;
+
+    const monthReadings = sortedEntries.filter(e => e.date.substring(0, 7) === month);
+    const firstReading = monthReadings[0];
+    const lastReading = monthReadings[monthReadings.length - 1];
+    if (!firstReading || !lastReading) continue;
+
+    let startValue = interpolateAtDate(firstDay);
+    if (startValue === null) {
+      startValue = firstReading.reading.previous_reading ?? firstReading.reading.reading_value;
+    }
+
+    const endValue = lastReading.reading.reading_value;
+    const endDate = lastReading.date;
+    const daysCovered = Math.max(1, Math.round(
+      (new Date(endDate).getTime() - new Date(firstDay).getTime()) / (1000 * 60 * 60 * 24)
+    ) + 1);
+
+    const consumed = Math.max(0, endValue - startValue);
+    monthlyData[month] = { dailyAvg: consumed / daysCovered, totalConsumed: consumed, days: daysCovered };
+  }
+
+  const months = sortedMonths.slice(-6);
+  const monthlyAvg = months.map(m => monthlyData[m]?.dailyAvg ?? 0);
 
   const chartData = {
-    labels: monthLabels,
+    labels: months.map(m => `${m.substring(5)}月`),
     datasets: [
       {
         label: "日均用电 (度)",

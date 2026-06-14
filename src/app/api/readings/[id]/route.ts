@@ -23,8 +23,8 @@ export async function GET(
 
 function updateNextReadingPrevious(db: ReturnType<typeof getDb>, currentReading: Reading, newValue: number) {
   const nextReading = db.prepare(
-    'SELECT id, previous_reading FROM readings WHERE reading_date > ? ORDER BY reading_date ASC LIMIT 1'
-  ).get(currentReading.reading_date) as { id: string; previous_reading: number } | undefined;
+      'SELECT id, previous_reading FROM readings WHERE reading_date > ? OR (reading_date = ? AND reading_time > ?) ORDER BY reading_date ASC, reading_time ASC LIMIT 1'
+    ).get(currentReading.reading_date, currentReading.reading_date, currentReading.reading_time ?? '') as { id: string; previous_reading: number } | undefined;
 
   if (nextReading && nextReading.previous_reading === currentReading.reading_value) {
     db.prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(newValue, nextReading.id);
@@ -39,7 +39,7 @@ export async function PUT(
     const db = getDb();
     const { id } = await params;
     const body = await request.json();
-    const { reading_value, reading_date, notes } = body;
+    const { reading_value, reading_date, reading_time, notes } = body;
 
     const oldReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id) as Reading | undefined;
     if (!oldReading) {
@@ -53,14 +53,21 @@ export async function PUT(
     if (typeof reading_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(reading_date)) {
       return NextResponse.json({ error: '日期格式不正确，应为 YYYY-MM-DD' }, { status: 400 });
     }
+    if (reading_time !== undefined && reading_time !== null && reading_time !== '') {
+      if (typeof reading_time !== 'string' || !/^\d{2}:\d{2}$/.test(reading_time)) {
+        return NextResponse.json({ error: '时间格式不正确，应为 HH:MM' }, { status: 400 });
+      }
+    }
+
+    const newTime = reading_time !== undefined ? (reading_time || null) : oldReading.reading_time;
 
     const prevReading = db.prepare(
-      'SELECT reading_value FROM readings WHERE reading_date < ? AND id != ? ORDER BY reading_date DESC LIMIT 1'
-    ).get(reading_date, id) as { reading_value: number } | undefined;
+      `SELECT reading_value FROM readings WHERE (reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, ''))) AND id != ? ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
+    ).get(reading_date, reading_date, newTime, id) as { reading_value: number } | undefined;
 
     const nextReading = db.prepare(
-      'SELECT reading_value FROM readings WHERE reading_date > ? AND id != ? ORDER BY reading_date ASC LIMIT 1'
-    ).get(reading_date, id) as { reading_value: number } | undefined;
+      `SELECT reading_value FROM readings WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, ''))) AND id != ? ORDER BY reading_date ASC, reading_time ASC LIMIT 1`
+    ).get(reading_date, reading_date, newTime, id) as { reading_value: number } | undefined;
 
     if (prevReading && reading_value < prevReading.reading_value) {
       return NextResponse.json(
@@ -79,9 +86,9 @@ export async function PUT(
     const transaction = db.transaction(() => {
       db.prepare(`
         UPDATE readings
-        SET reading_value = ?, reading_date = ?, notes = ?
+        SET reading_value = ?, reading_date = ?, reading_time = ?, notes = ?
         WHERE id = ?
-      `).run(reading_value, reading_date, notes, id);
+      `).run(reading_value, reading_date, newTime, notes, id);
 
       updateNextReadingPrevious(db, oldReading, reading_value);
     });
@@ -110,8 +117,8 @@ export async function DELETE(
     }
 
     const prevReading = db.prepare(
-      'SELECT reading_value FROM readings WHERE reading_date < ? ORDER BY reading_date DESC LIMIT 1'
-    ).get(oldReading.reading_date) as { reading_value: number } | undefined;
+      `SELECT reading_value FROM readings WHERE (reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, ''))) ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
+    ).get(oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '') as { reading_value: number } | undefined;
 
     const newPreviousReading = prevReading?.reading_value ?? null;
 
@@ -120,8 +127,9 @@ export async function DELETE(
 
       db.prepare(`
         UPDATE readings SET previous_reading = ?
-        WHERE reading_date > ? AND previous_reading = ?
-      `).run(newPreviousReading, oldReading.reading_date, oldReading.reading_value);
+        WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, '')))
+        AND previous_reading = ?
+      `).run(newPreviousReading, oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '', oldReading.reading_value);
     });
 
     transaction();

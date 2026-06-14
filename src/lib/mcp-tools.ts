@@ -18,6 +18,7 @@ export function getToolInfoList(): McpToolInfo[] {
         properties: {
           reading_value: { type: 'number', description: '电表当前读数（整数或小数）' },
           reading_date: { type: 'string', description: '读数日期，格式 YYYY-MM-DD' },
+          reading_time: { type: 'string', description: '记录时间，格式 HH:MM，用于区分同一天的多笔记录' },
           notes: { type: 'string', description: '可选备注信息' },
         },
         required: ['reading_value', 'reading_date'],
@@ -59,6 +60,46 @@ export function getToolInfoList(): McpToolInfo[] {
       title: '备份数据库',
       description: '创建当前数据库的完整备份文件，存储在服务器 data/backups 目录下。',
       parameters: { type: 'object', properties: {} },
+    },
+    {
+      name: 'get_reading',
+      title: '获取单条读数',
+      description: '根据 ID 获取一条电表读数的详细信息。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '读数的 UUID' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'update_reading',
+      title: '编辑读数',
+      description: '编辑一条已有的电表读数。可修改读数值、日期、时间和备注。修改后系统自动更新前后读数的用电量计算。读数必须保持时间递增的单调性。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '要编辑的读数 UUID' },
+          reading_value: { type: 'number', description: '新的电表读数' },
+          reading_date: { type: 'string', description: '新的日期，格式 YYYY-MM-DD' },
+          reading_time: { type: 'string', description: '新的记录时间，格式 HH:MM' },
+          notes: { type: 'string', description: '新的备注信息' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'delete_reading',
+      title: '删除读数',
+      description: '删除一条电表读数记录。删除后系统自动修正前后读数的关联关系。此操作不可撤销。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '要删除的读数 UUID' },
+        },
+        required: ['id'],
+      },
     },
     {
       name: 'get_settings',

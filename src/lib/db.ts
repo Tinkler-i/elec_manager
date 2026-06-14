@@ -45,6 +45,12 @@ function initializeDb(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_readings_date ON readings(reading_date);
   `);
 
+  // Migration: add reading_time column if missing
+  const columns = db.prepare("PRAGMA table_info(readings)").all() as { name: string }[];
+  if (!columns.some(c => c.name === 'reading_time')) {
+    db.exec("ALTER TABLE readings ADD COLUMN reading_time TEXT");
+  }
+
   const rateSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('rate_per_kwh');
   if (!rateSetting) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('rate_per_kwh', '0.56');

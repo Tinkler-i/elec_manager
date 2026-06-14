@@ -72,6 +72,14 @@ export function MonthlyComparisonChart() {
     return acc;
   }, {} as Record<string, Reading>);
 
+  const firstReadingOfMonth = readings.reduce((acc, r) => {
+    const month = r.reading_date.substring(0, 7);
+    if (!acc[month] || r.reading_date < acc[month].reading_date) {
+      acc[month] = r;
+    }
+    return acc;
+  }, {} as Record<string, Reading>);
+
   const sortedMonths = Object.keys(lastReadingOfMonth).sort();
   
   const monthlyData: Record<string, number> = {};
@@ -79,9 +87,14 @@ export function MonthlyComparisonChart() {
     const currentReading = lastReadingOfMonth[month];
     const prevReading = index > 0 ? lastReadingOfMonth[sortedMonths[index - 1]] : null;
     
-    const consumed = prevReading 
-      ? currentReading.reading_value - prevReading.reading_value
-      : currentReading.reading_value - (currentReading.previous_reading || 0);
+    let consumed: number;
+    if (prevReading) {
+      consumed = currentReading.reading_value - prevReading.reading_value;
+    } else {
+      const firstReading = firstReadingOfMonth[month];
+      const baseline = firstReading?.previous_reading ?? 0;
+      consumed = currentReading.reading_value - baseline;
+    }
     
     monthlyData[month] = Math.max(0, consumed);
   });

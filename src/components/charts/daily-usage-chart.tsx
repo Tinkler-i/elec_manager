@@ -80,28 +80,44 @@ export function DailyUsageChart() {
     setEndDate(end.toISOString().split("T")[0]);
   }
 
-  const lastReadingOfDay = readings.reduce((acc, r) => {
+  const dayGroups: Record<string, Reading[]> = {};
+  readings.forEach(r => {
     const date = r.reading_date;
-    if (!acc[date] || r.reading_date > acc[date].reading_date) {
-      acc[date] = r;
+    if (!dayGroups[date]) dayGroups[date] = [];
+    dayGroups[date].push(r);
+  });
+
+  const sortedDatesWithReadings = Object.keys(dayGroups).sort();
+
+  const dailyData: { date: string; dailyAvg: number; totalConsumed: number; days: number }[] = [];
+  for (let i = 0; i < sortedDatesWithReadings.length; i++) {
+    const date = sortedDatesWithReadings[i];
+    const dayReadings = dayGroups[date].sort((a, b) => (a.reading_time ?? '').localeCompare(b.reading_time ?? ''));
+    const firstOfDay = dayReadings[0];
+    const lastOfDay = dayReadings[dayReadings.length - 1];
+
+    let consumed: number;
+    if (i === 0) {
+      consumed = lastOfDay.units_consumed || 0;
+      dailyData.push({ date, dailyAvg: 0, totalConsumed: consumed, days: 0 });
+    } else {
+      const prevDate = new Date(sortedDatesWithReadings[i - 1]);
+      const curDate = new Date(date);
+      const daysDiff = Math.max(1, Math.round((curDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24)));
+      consumed = lastOfDay.reading_value - (firstOfDay.previous_reading ?? 0);
+      dailyData.push({ date, dailyAvg: consumed / daysDiff, totalConsumed: consumed, days: daysDiff });
     }
-    return acc;
-  }, {} as Record<string, Reading>);
+  }
 
-  const dailyData = Object.entries(lastReadingOfDay).reduce((acc, [date, reading]) => {
-    acc[date] = reading.units_consumed || 0;
-    return acc;
-  }, {} as Record<string, number>);
-
-  const sortedDates = Object.keys(dailyData).sort();
-  const dailyConsumed = sortedDates.map(d => dailyData[d]);
-  const maxUsage = Math.max(...dailyConsumed);
+  const sortedDates = dailyData.map(d => d.date);
+  const dailyConsumed = dailyData.map(d => d.dailyAvg);
+  const maxUsage = Math.max(...dailyConsumed, 0);
 
   const chartData = {
     labels: sortedDates,
     datasets: [
       {
-        label: "日用电量 (度)",
+        label: "日均用电量 (度)",
         data: dailyConsumed,
         borderColor: "rgb(59, 130, 246)",
         backgroundColor: "rgba(59, 130, 246, 0.5)",
@@ -128,8 +144,12 @@ export function DailyUsageChart() {
           label: function(context: { dataset: { label?: string }; parsed: { y: number | null }; dataIndex: number }) {
             const usage = context.parsed.y;
             if (usage === null) return "";
-            const cost = (usage * rate).toFixed(2);
-            return `用电: ${usage.toFixed(1)} 度 | 电费: ¥${cost}`;
+            const entry = dailyData[context.dataIndex];
+            const cost = (entry.totalConsumed * rate).toFixed(2);
+            if (entry.days > 1) {
+              return [`日均: ${usage.toFixed(2)} 度`, `${entry.days}天合计: ${entry.totalConsumed.toFixed(1)} 度 (¥${cost})`];
+            }
+            return `用电: ${usage.toFixed(2)} 度 | 电费: ¥${cost}`;
           },
         },
       },
@@ -151,7 +171,7 @@ export function DailyUsageChart() {
         position: "left" as const,
         title: {
           display: true,
-          text: "用电量 (度)",
+          text: "日均用电量 (度)",
         },
         beginAtZero: true,
       },
@@ -176,7 +196,10 @@ export function DailyUsageChart() {
     <Card>
       <CardHeader>
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <CardTitle>日用电量</CardTitle>
+          <div>
+            <CardTitle>日均用电量</CardTitle>
+            <p className="text-sm text-gray-500 mt-1">跨多天的读数按日均计算，悬浮查看详细</p>
+          </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={() => handleQuickSelect(1)}>近1月</Button>

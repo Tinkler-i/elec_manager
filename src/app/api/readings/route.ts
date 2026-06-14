@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       params.push(endDate);
     }
 
-    query += ' ORDER BY reading_date DESC';
+    query += ' ORDER BY reading_date DESC, reading_time DESC';
 
     if (limit) {
       query += ' LIMIT ?';
@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
   try {
     const db = getDb();
     const body = await request.json();
-    const { reading_value, reading_date, notes, source = 'manual', created_by = 'user' } = body;
+    const { reading_value, reading_date, reading_time = null, notes, source = 'manual', created_by = 'user' } = body;
 
     // 输入验证
     if (typeof reading_value !== 'number' || !isFinite(reading_value) || reading_value < 0) {
@@ -48,6 +48,11 @@ export async function POST(request: NextRequest) {
     }
     if (typeof reading_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(reading_date)) {
       return NextResponse.json({ error: '日期格式不正确，应为 YYYY-MM-DD' }, { status: 400 });
+    }
+    if (reading_time !== null && reading_time !== undefined && reading_time !== '') {
+      if (typeof reading_time !== 'string' || !/^\d{2}:\d{2}$/.test(reading_time)) {
+        return NextResponse.json({ error: '时间格式不正确，应为 HH:MM' }, { status: 400 });
+      }
     }
     if (notes !== undefined && notes !== null && typeof notes !== 'string') {
       return NextResponse.json({ error: '备注必须是字符串' }, { status: 400 });
@@ -91,9 +96,9 @@ export async function POST(request: NextRequest) {
 
     const id = generateId();
     db.prepare(`
-      INSERT INTO readings (id, reading_value, reading_date, previous_reading, notes, source, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(id, reading_value, reading_date, previous_reading, notes, source, created_by);
+      INSERT INTO readings (id, reading_value, reading_date, reading_time, previous_reading, notes, source, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, reading_value, reading_date, reading_time || null, previous_reading, notes, source, created_by);
 
     const newReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id);
 

@@ -2,6 +2,7 @@ export interface Reading {
   id: string;
   reading_value: number;
   reading_date: string;
+  reading_time: string | null;
   previous_reading: number | null;
   units_consumed: number;
   notes: string | null;

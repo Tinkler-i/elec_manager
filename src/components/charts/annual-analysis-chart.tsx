@@ -67,17 +67,22 @@ export function AnnualAnalysisChart() {
   }
 
   const dataByYearMonth: Record<string, Record<string, Reading>> = {};
+  const firstByYearMonth: Record<string, Record<string, Reading>> = {};
   readings.forEach(r => {
     const yearMonth = r.reading_date.substring(0, 7);
     const year = yearMonth.substring(0, 4);
     
     if (!dataByYearMonth[year]) {
       dataByYearMonth[year] = {};
+      firstByYearMonth[year] = {};
     }
     
     const month = yearMonth.substring(5, 7);
     if (!dataByYearMonth[year][month] || r.reading_date > dataByYearMonth[year][month].reading_date) {
       dataByYearMonth[year][month] = r;
+    }
+    if (!firstByYearMonth[year][month] || r.reading_date < firstByYearMonth[year][month].reading_date) {
+      firstByYearMonth[year][month] = r;
     }
   });
 
@@ -108,9 +113,14 @@ export function AnnualAnalysisChart() {
       const prevMonth = monthIndex > 0 ? sortedMonths[monthIndex - 1] : null;
       const prevReading = prevMonth ? dataByYearMonth[year]?.[prevMonth] : null;
 
-      const consumed = prevReading
-        ? currentReading.reading_value - prevReading.reading_value
-        : currentReading.reading_value - (currentReading.previous_reading || 0);
+      let consumed: number;
+      if (prevReading) {
+        consumed = currentReading.reading_value - prevReading.reading_value;
+      } else {
+        const firstReading = firstByYearMonth[year]?.[month];
+        const baseline = firstReading?.previous_reading ?? 0;
+        consumed = currentReading.reading_value - baseline;
+      }
 
       const val = Math.max(0, consumed);
       if (val > maxUsage) maxUsage = val;
