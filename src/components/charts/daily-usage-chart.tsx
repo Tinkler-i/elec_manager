@@ -93,7 +93,6 @@ export function DailyUsageChart() {
   for (let i = 0; i < sortedDatesWithReadings.length; i++) {
     const date = sortedDatesWithReadings[i];
     const dayReadings = dayGroups[date].sort((a, b) => (a.reading_time ?? '').localeCompare(b.reading_time ?? ''));
-    const firstOfDay = dayReadings[0];
     const lastOfDay = dayReadings[dayReadings.length - 1];
 
     let consumed: number;
@@ -104,7 +103,9 @@ export function DailyUsageChart() {
       const prevDate = new Date(sortedDatesWithReadings[i - 1]);
       const curDate = new Date(date);
       const daysDiff = Math.max(1, Math.round((curDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24)));
-      consumed = lastOfDay.reading_value - (firstOfDay.previous_reading ?? 0);
+      const prevDayReadings = dayGroups[sortedDatesWithReadings[i - 1]].sort((a, b) => (a.reading_time ?? '').localeCompare(b.reading_time ?? ''));
+      const lastOfPrevDay = prevDayReadings[prevDayReadings.length - 1];
+      consumed = lastOfDay.reading_value - lastOfPrevDay.reading_value;
       dailyData.push({ date, dailyAvg: consumed / daysDiff, totalConsumed: consumed, days: daysDiff });
     }
   }

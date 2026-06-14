@@ -42,7 +42,7 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 
 从 [Releases](https://github.com/Tinkler-i/elec_manager/releases) 下载对应架构的 fpk 文件，在飞牛设备的应用中心手动安装。
 
-文件命名格式：`elec-meter-v{版本}-{架构}.fpk`（如 `elec-meter-v1.9.0-amd64.fpk`）。
+文件命名格式：`elec-meter-v{版本}-{架构}.fpk`（如 `elec-meter-v1.9.1-amd64.fpk`）。
 
 也可在本地构建：
 
