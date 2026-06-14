@@ -4,9 +4,10 @@
 
 ## 功能特性
 
-- **读数记录** - 手动输入电表读数，支持初始读数配置
-- **数据可视化** - 日用电量、月度趋势、用电统计图表
-- **标准 MCP** - 支持 Streamable HTTP 和 Stdio 两种传输方式
+- **读数记录** - 手动输入电表读数，支持时间字段区分同天多条记录
+- **数据可视化** - 日均用电量、月度趋势、年度对比、用电统计图表
+- **标准 MCP** - 10 个 MCP 工具，支持 Streamable HTTP 和 Stdio 两种传输方式
+- **批量操作** - 多选批量删除读数记录
 - **安全认证** - JWT 自动管理、登录速率限制、安全响应头
 - **数据导出** - CSV 格式导出读数数据
 - **数据备份** - 一键备份和恢复数据库
@@ -41,7 +42,7 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 
 从 [Releases](https://github.com/Tinkler-i/elec_manager/releases) 下载对应架构的 fpk 文件，在飞牛设备的应用中心手动安装。
 
-文件命名格式：`elec-meter-v{版本}-{架构}.fpk`（如 `elec-meter-v1.0.0-amd64.fpk`）。
+文件命名格式：`elec-meter-v{版本}-{架构}.fpk`（如 `elec-meter-v1.9.0-amd64.fpk`）。
 
 也可在本地构建：
 
@@ -57,6 +58,89 @@ npm run build
 cd .next/standalone
 node server.js
 ```
+
+## 数据模型
+
+### 读数记录 (readings)
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | TEXT | UUID 主键 |
+| `reading_value` | REAL | 电表当前读数 |
+| `reading_date` | TEXT | 读数日期 (YYYY-MM-DD) |
+| `reading_time` | TEXT | 记录时间 (HH:MM)，可选，用于区分同天多条 |
+| `previous_reading` | REAL | 前一条读数的值，用于计算用电量 |
+| `units_consumed` | REAL | 用电量（自动生成：`reading_value - COALESCE(previous_reading, 0)`） |
+| `notes` | TEXT | 备注 |
+| `source` | TEXT | 来源：`manual`(手工) / `mcp`(AI) / `import`(导入) |
+| `created_by` | TEXT | 创建者 |
+| `is_verified` | INTEGER | 是否已核验 |
+| `created_at` | TEXT | 创建时间 |
+
+### 设置 (settings)
+
+| key | 默认值 | 说明 |
+|-----|--------|------|
+| `rate_per_kwh` | `0.56` | 电价（元/度） |
+| `initial_reading` | `0` | 初始读数基准 |
+
+## 数据图表算法
+
+### 日均用电量图表 (`daily-usage-chart`)
+
+**数据来源：** 读数记录表，按日期分组取最后一条。
+
+**算法：**
+1. 按天分组读数，同天多条取最后一条
+2. 每天的用电量 = 当天最后一条 `reading_value` - 当天第一条 `previous_reading`
+3. 日均用电量 = 用电量 / 与上一条读数的间隔天数
+4. 第一条读数日均 = 0（无对比基准）
+
+**示例：** 6月1日读数 100，6月5日读数 140 → 用电量 40，间隔 4 天 → 日均 10 度/天
+
+### 仪表盘用电趋势 (`usage-chart`)
+
+**数据来源：** 读数记录表，月边界插值。
+
+**算法：**
+1. 取每月最后一条读数
+2. 在每月1号做线性插值得到月初读数值
+3. 月用电量 = 月末读数 - 月初插值
+4. 日均用电量 = 月用电量 / 覆盖天数（月初到最后一条读数的实际天数）
+
+**处理边界情况：**
+- 当月未结束：天数 = 月初到最后一条读数的实际天数，非整月天数
+- 首月无月初数据：回退到首条读数的 `previous_reading` 作为基准
+- 跨月/跨年：插值自动处理
+
+### 月度对比图表 (`monthly-comparison`)
+
+**数据来源：** 读数记录表，按月分组。
+
+**算法：**
+1. 取每月最后一条读数
+2. 月用电量 = 当月最后读数 - 上月最后读数
+3. 首月：用电量 = 最后读数 - 首条读数的 `previous_reading`
+
+### 年度对比图表 (`annual-analysis`)
+
+**数据来源：** 同月度对比，按年分组展示。
+
+### 用电统计 (`stats`)
+
+**数据来源：** 读数记录表。
+
+**算法：**
+1. 按月分组取最后一条读数
+2. 月用电量 = 当月最后读数 - 上月最后读数
+3. 总用电量 = 各月用电量之和
+4. 当月用电量 = 当月最后读数 - 上月最后读数
+
+### 读数记录表 (`readings` page)
+
+- **用电量列**：已移除（`units_consumed` 为数据库生成列，读数差值跨天时参考价值有限）
+- **费用列**：已移除（可在仪表盘统计中查看）
+- **来源标记**：AI（紫色）/ 手工（灰色）/ 导入（橙色）
 
 ## 安全特性
 
@@ -113,12 +197,15 @@ node server.js
 
 | 工具 | 说明 |
 |------|------|
-| `add_reading` | 记录电表读数 |
-| `list_readings` | 查询读数记录 |
-| `get_statistics` | 获取用电统计概览 |
-| `export_readings` | 导出读数数据（CSV） |
-| `create_backup` | 创建数据库备份 |
-| `get_settings` | 查看系统配置 |
+| `add_reading` | 记录电表读数（支持 reading_time） |
+| `list_readings` | 查询读数记录（支持日期范围筛选） |
+| `get_reading` | 根据 ID 获取单条读数详情 |
+| `update_reading` | 编辑读数（值、日期、时间、备注），自动级联修复 |
+| `delete_reading` | 删除读数，自动修正前后读数关联 |
+| `get_stats` | 获取用电统计概览（总用电、本月用电等） |
+| `export_readings` | 导出所有读数数据 |
+| `backup_database` | 创建数据库备份 |
+| `get_settings` | 查看系统配置（电价、初始读数） |
 
 ## 环境变量
 
@@ -140,8 +227,9 @@ node server.js
 | GET/POST | /api/auth/token | 获取/刷新 Token |
 | GET | /api/stats | 统计数据 |
 | GET/POST | /api/readings | 读数列表/添加读数 |
-| GET/PUT/DELETE | /api/readings/[id] | 读数详情 |
-| PUT | /api/readings/recalculate | 重新计算用电量 |
+| GET/PUT/DELETE | /api/readings/[id] | 读数详情/编辑/删除 |
+| POST | /api/readings/batch-delete | 批量删除读数 |
+| POST | /api/readings/recalculate | 重新计算用电量 |
 | GET/PUT | /api/settings | 设置管理 |
 | GET/POST | /api/backup | 备份管理 |
 | DELETE | /api/backup | 删除备份 |
