@@ -16,12 +16,18 @@
  * 早期的 `['data','fnos','docs','scripts','src']` 一个都盖不住。改成与仓库根比对之后，
  * 以后新增目录/文件不用维护名单。
  *
+ * 为什么不会因为冷启动测试误报：`scripts/lib/postbuild-server.mjs` 的 `ensureStandalone()`
+ * 会把 `public` / `.next/static` 拷进 standalone，所以「先跑测试、紧接着 build」这个顺序
+ * 看起来会留下一个多出来的 `public`。实测**不误报** —— `next build` 默认
+ * `cleanDistDir: true`，重建时整个 `.next` 会被清掉，上一轮拷进去的 `public` 不复存在。
+ * （QA 跑过这个序列：build → 冷启动测试 → build，第二次仍是顶层 4 项 ✓。）
+ *
  * 试过的死路（别再试）：
  *   · `outputFileTracingExcludes` —— 见 next.config.ts 里那段记录
  *   · 把 ignore 写在语句位置 —— 必须是**实参位置**，见 src/lib/auth.ts
  *
- * 由 `package.json` 的 `postbuild` 自动挂上，所以 `npm run build` 的三个使用方
- * （ci.yml、build-fpk.yml、fnos/build.sh）都被覆盖，不需要各自再写一遍。
+ * 由 `package.json` 的 `postbuild` 自动挂上；`ci.yml` / `build-fpk.yml` / `fnos/build.sh`
+ * 里另有一层**显式调用**，不依赖这个钩子（钩子被误删时仍会拦）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,6 +40,11 @@ const STANDALONE = path.join(ROOT, '.next', 'standalone');
  * standalone 顶层本来就该有的四项。
  * `.next` / `node_modules` / `package.json` 仓库根也有，所以必须显式放行；
  * `server.js` 是 Next 生成的、仓库根没有它，列在这里只是让「该有什么」一眼看得全。
+ *
+ * 已知边界 —— `public`：它既可能是泄漏症状（whole-project glob 那次 21 项里就有它），
+ * 也是合法运行期需求（`fnos/build.sh` / `Dockerfile` 都要把 `public` 搬进去）。今天它
+ * 出现在顶层就是泄漏症状，所以**不预先放行**。将来 Next 真把它生成进 standalone 时，
+ * 按下面失败信息里的处置指引加进来即可 —— 宁可在无害时红一次，也不为了不误报把门改宽。
  */
 const EXPECTED = new Set(['.next', 'node_modules', 'package.json', 'server.js']);
 
@@ -54,13 +65,27 @@ const leaked = top.filter(
 );
 
 if (leaked.length > 0) {
+  // 标注文件/目录：两种泄漏形态靠这个区分 —— 目录（`data`/`src`/`docs`）多半是某条路径被
+  // 单点 trace；根文件（`Dockerfile`/`.env`/`README.md`）则是「整个仓库被 glob」。
+  // 判据一样，但线索不同，省得读者自己去 ls。
+  const width = Math.max(...leaked.map((name) => name.length));
   console.error('');
   console.error(`✗ standalone 顶层混进了仓库里已有的条目（${leaked.length} 项）:`);
   for (const name of leaked) {
-    console.error(`    ${name}`);
+    const kind = fs.statSync(path.join(STANDALONE, name)).isDirectory() ? '目录' : '文件';
+    console.error(`    ${name.padEnd(width)}  ${kind}`);
   }
-  console.error('  这些是仓库内容被 Turbopack trace 进来了，不该随构建产物发出去。');
-  console.error('  修法：给 src/lib 里那条路径的实参加上 /*turbopackIgnore: true*/（见 auth.ts / db.ts）。');
+  console.error('');
+  console.error(`  standalone 顶层本该只有: ${[...EXPECTED].join(', ')}`);
+  console.error('');
+  console.error('  这些是构建期被 Turbopack trace 进来的仓库内容，不该随产物发出去。');
+  console.error('  处置：');
+  console.error('    1) 先修源头：给 src/lib 里那条路径的实参加上 /*turbopackIgnore: true*/');
+  console.error('       （见 src/lib/auth.ts / db.ts）。多数情况到这一步就好了。');
+  console.error('    2) 若确认某一项是 Next 新版本正常生成的、不是泄漏，把它加进本脚本的');
+  console.error('       EXPECTED，并在那里写明原因。');
+  console.error('    3) 不要改成「忽略整类」（按后缀、按看起来像生成物之类）—— 那是把门改宽，');
+  console.error('       正是这一轮反复踩的「看起来在拦、其实没拦」。');
   process.exit(1);
 }
 
