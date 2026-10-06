@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, invalidateSettingsCache } from '@/lib/db';
+import { toPublicSettings } from '@/lib/settings-keys';
 import { Setting } from '@/types';
 
 // 允许通过 Settings API 修改的 key 白名单
@@ -8,13 +9,9 @@ const ALLOWED_KEYS = new Set(['rate_per_kwh', 'initial_reading']);
 export async function GET() {
   try {
     const db = getDb();
-    // 只返回非敏感设置（排除 auth_password）
-    const settings = db.prepare('SELECT key, value, updated_at FROM settings WHERE key != ?').all('auth_password') as Setting[];
-    const settingsObj = settings.reduce((acc, setting) => {
-      acc[setting.key] = setting.value;
-      return acc;
-    }, {} as Record<string, string>);
-    return NextResponse.json(settingsObj);
+    // 凭据类 key（auth_password、mcp_key_*）不外发，名单见 src/lib/settings-keys.ts
+    const settings = db.prepare('SELECT key, value, updated_at FROM settings').all() as Setting[];
+    return NextResponse.json(toPublicSettings(settings));
   } catch (error) {
     return NextResponse.json({ error: '获取设置失败' }, { status: 500 });
   }
@@ -56,14 +53,10 @@ export async function PUT(request: NextRequest) {
 
     invalidateSettingsCache();
 
-    // 返回时排除敏感字段
-    const newSettings = db.prepare('SELECT key, value, updated_at FROM settings WHERE key != ?').all('auth_password') as Setting[];
-    const settingsObj = newSettings.reduce((acc, setting) => {
-      acc[setting.key] = setting.value;
-      return acc;
-    }, {} as Record<string, string>);
+    // 返回时同样过滤敏感项
+    const newSettings = db.prepare('SELECT key, value, updated_at FROM settings').all() as Setting[];
 
-    return NextResponse.json(settingsObj);
+    return NextResponse.json(toPublicSettings(newSettings));
   } catch (error) {
     return NextResponse.json({ error: '更新设置失败' }, { status: 500 });
   }
