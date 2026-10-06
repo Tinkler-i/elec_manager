@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ error: '无效的导出类型' }, { status: 400 });
   } catch (error) {
+    console.error('导出数据失败:', error);
     return NextResponse.json({ error: '导出数据失败' }, { status: 500 });
   }
 }

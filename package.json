@@ -7,7 +7,7 @@
     "build": "next build",
     "postbuild": "node scripts/lib/check-standalone-clean.mjs",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint --max-warnings 0",
     "test": "node --experimental-strip-types scripts/test-calculations.ts",
     "mcp": "npx tsx mcp-server.ts"
   },

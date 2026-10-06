@@ -22,6 +22,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true, message: '密码已修改' });
   } catch (error) {
+    console.error('修改密码失败:', error);
     return NextResponse.json({ error: '修改密码失败' }, { status: 500 });
   }
 }

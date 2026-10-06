@@ -10,6 +10,7 @@ export async function GET() {
     // 凭据类 key（auth_password、mcp_key_*）不外发，名单见 src/lib/settings-keys.ts
     return NextResponse.json(toPublicSettings(getAllSettings()));
   } catch (error) {
+    console.error('获取设置失败:', error);
     return NextResponse.json({ error: '获取设置失败' }, { status: 500 });
   }
 }
@@ -58,6 +59,7 @@ export async function PUT(request: NextRequest) {
     // 返回时同样过滤敏感项
     return NextResponse.json(toPublicSettings(getAllSettings()));
   } catch (error) {
+    console.error('更新设置失败:', error);
     return NextResponse.json({ error: '更新设置失败' }, { status: 500 });
   }
 }

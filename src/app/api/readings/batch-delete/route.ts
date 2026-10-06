@@ -18,6 +18,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ deleted });
   } catch (error) {
+    console.error('批量删除失败:', error);
     return NextResponse.json({ error: '批量删除失败' }, { status: 500 });
   }
 }
