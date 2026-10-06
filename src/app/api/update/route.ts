@@ -109,6 +109,7 @@ async function checkLatest(current: string): Promise<UpdateInfo> {
       notes: data.body ? data.body.trim().slice(0, 600) : null,
     };
   } catch (e) {
+    console.error('更新检查失败:', e);
     const name = (e as { name?: string })?.name;
     const code = (e as { cause?: { code?: string } })?.cause?.code;
     return {

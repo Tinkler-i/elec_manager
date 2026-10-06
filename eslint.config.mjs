@@ -26,6 +26,32 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  // 「静默 catch」门禁：API 路由里的 catch 必须留痕（见 docs/coding-standards.md
+  // 「catch 必须留痕」）。2026-10 实测过一次：规范里早写着「不要吞异常」，
+  // src/app/api 下 17 处 catch 照样全吞了 —— 规则不进门禁就等于不会响。
+  //
+  // 为什么**只**覆盖 src/app/api/**：这一层的契约是「异常 → 500 + 服务端日志」，
+  // 留痕是硬要求。其它层的 catch 有各自的合法形态，一刀切只会逼出注释禁用（等于把门关掉）：
+  //   · src/proxy.ts —— token 校验失败是**预期控制流**（401 / 跳登录页），不是异常；
+  //   · src/lib/api.ts —— 网络失败是**转译成 ApiError 后重抛**，调用方会看到；
+  //   · src/lib/auth.ts —— 读不到 jwt_secret 文件就**继续生成**，刻意忽略；
+  //   · 客户端组件 —— 用 toast 告知用户，不需要服务端日志；
+  //   · src/lib/mcp-server.ts —— 把错误作为工具结果回给 MCP 调用方。
+  // 这些「静默」都是有意的，规则不覆盖它们；覆盖范围写进规范，别读成「全局都管」。
+  {
+    files: ["src/app/api/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "CatchClause > BlockStatement:not(:has(CallExpression[callee.object.name='console']))",
+          message:
+            "catch 块必须留痕：加 console.error(...) 记录异常（或等价手段）。只返回响应、把异常丢掉会让运维无法诊断 —— 见 docs/coding-standards.md「catch 必须留痕」。",
+        },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;
