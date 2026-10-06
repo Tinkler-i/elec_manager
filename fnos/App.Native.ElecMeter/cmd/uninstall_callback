@@ -1,2 +1,18 @@
 #!/bin/bash
+# 卸载回调：按用户在卸载向导里的选择处理数据。
+#
+# wizard/uninstall 收集的 wizard_data_action 会作为同名环境变量传进来：
+#   keep   —— 保留数据（默认）。重装后仍能看到原来的抄表记录。
+#   delete —— 删除数据。用户明确选了才删。
+#
+# 只删应用自己的数据目录（TRIM_PKGVAR），不碰用户的其他文件。
+
+set -u
+
+if [ "${wizard_data_action:-keep}" = "delete" ]; then
+    if [ -n "${TRIM_PKGVAR:-}" ] && [ -d "${TRIM_PKGVAR}" ]; then
+        rm -rf "${TRIM_PKGVAR}"
+    fi
+fi
+
 exit 0

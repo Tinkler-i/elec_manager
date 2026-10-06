@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
+import { BACKUP_DIR, getDb } from '@/lib/db';
 import fs from 'fs';
 import path from 'path';
 
 export async function POST() {
   try {
     const db = getDb();
-    const backupDir = path.join(process.cwd(), 'data', 'backups');
+    const backupDir = BACKUP_DIR;
 
     if (!fs.existsSync(backupDir)) {
       fs.mkdirSync(backupDir, { recursive: true });
@@ -31,7 +31,7 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const fileName = searchParams.get('file');
     const deleteAll = searchParams.get('all') === 'true';
-    const backupDir = path.join(process.cwd(), 'data', 'backups');
+    const backupDir = BACKUP_DIR;
 
     if (deleteAll) {
       if (fs.existsSync(backupDir)) {
@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
     const fileName = searchParams.get('file');
 
     if (fileName) {
-      const backupDir = path.join(process.cwd(), 'data', 'backups');
+      const backupDir = BACKUP_DIR;
       const safeName = path.basename(fileName);
       const filePath = path.join(backupDir, safeName);
 
@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const backupDir = path.join(process.cwd(), 'data', 'backups');
+    const backupDir = BACKUP_DIR;
 
     if (!fs.existsSync(backupDir)) {
       return NextResponse.json([]);

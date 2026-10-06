@@ -44,12 +44,16 @@ docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
 
 文件命名格式：`elec-meter-v{版本}-{架构}.fpk`（如 `elec-meter-v1.9.1-amd64.fpk`）。
 
+安装时会自动拉取 Node.js 运行时（`nodejs_v22`）。数据库与备份存放在应用数据目录，卸载时可以选择保留或删除。
+
 也可在本地构建：
 
 ```bash
 cd fnos
 ./build.sh
 ```
+
+打包细节（架构声明、运行身份、数据目录的取舍）见 [fnos/README.md](fnos/README.md)。
 
 ### Node.js 直接运行
 

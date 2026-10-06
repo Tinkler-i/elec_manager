@@ -4,8 +4,26 @@ set -e
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_DIR="${APP_DIR}/App.Native.ElecMeter"
 SERVER_DIR="${PACKAGE_DIR}/app/server"
+MANIFEST="${PACKAGE_DIR}/manifest"
+
+# 目标架构：默认跟本机一致，可用第一个参数覆盖（amd64 / arm64）
+TARGET_ARCH="${1:-}"
+if [ -z "${TARGET_ARCH}" ]; then
+    case "$(uname -m)" in
+        x86_64|amd64)  TARGET_ARCH=amd64 ;;
+        aarch64|arm64) TARGET_ARCH=arm64 ;;
+        *) echo "无法识别本机架构 $(uname -m)，请显式传入 amd64 或 arm64"; exit 1 ;;
+    esac
+fi
+
+case "${TARGET_ARCH}" in
+    amd64) FNOS_PLATFORM=x86; FNPACK_ARCH=linux-amd64 ;;
+    arm64) FNOS_PLATFORM=arm; FNPACK_ARCH=linux-arm64 ;;
+    *) echo "不支持的架构：${TARGET_ARCH}（可用：amd64 / arm64）"; exit 1 ;;
+esac
 
 echo "=== 飞牛 fnOS 应用构建 ==="
+echo "目标架构: ${TARGET_ARCH}  →  manifest platform=${FNOS_PLATFORM}"
 
 # 检查 Node.js
 if ! command -v node &> /dev/null; then
@@ -38,7 +56,8 @@ cp -r .next/static/. "${SERVER_DIR}/.next/static/"
 # 复制 public 资源
 cp -r public "${SERVER_DIR}/public"
 
-# 创建数据目录
+# 数据目录只作为占位。运行时数据库与备份都在 TRIM_PKGVAR（见 cmd/main），
+# 不会写到这里 —— 安装目录在升级时会被整体替换。
 mkdir -p "${SERVER_DIR}/data"
 
 # 清理不必要的文件（减小包体积）
@@ -88,11 +107,19 @@ if [ -d "node_modules/@modelcontextprotocol" ]; then
     cp -r node_modules/@modelcontextprotocol/sdk "${SERVER_DIR}/node_modules/@modelcontextprotocol/sdk"
 fi
 
-# 3. 删除非当前平台的 sharp 原生库
-find "${SERVER_DIR}" -type d -name "sharp-win32*" -exec rm -rf {} + 2>/dev/null || true
-find "${SERVER_DIR}" -type d -name "sharp-darwin*" -exec rm -rf {} + 2>/dev/null || true
-find "${SERVER_DIR}" -type d -name "sharp-libvips-linuxmusl*" -exec rm -rf {} + 2>/dev/null || true
-find "${SERVER_DIR}" -type d -name "sharp-linuxmusl*" -exec rm -rf {} + 2>/dev/null || true
+# 3. 只保留目标架构的 sharp 原生库
+if [ "${TARGET_ARCH}" = "amd64" ]; then
+    SHARP_KEEP="linux-x64"
+else
+    SHARP_KEEP="linux-arm64"
+fi
+for sharp_dir in "${SERVER_DIR}/node_modules/@img"/sharp-* "${SERVER_DIR}/node_modules/@img"/sharp-libvips-*; do
+    [ -d "${sharp_dir}" ] || continue
+    case "$(basename "${sharp_dir}")" in
+        *"${SHARP_KEEP}"*) continue ;;
+        *) rm -rf "${sharp_dir}" ;;
+    esac
+done
 
 # 4. 删除 Next.js 运行时不需要的大文件
 rm -f "${SERVER_DIR}/node_modules/next/dist/server/capsize-font-metrics.json" 2>/dev/null || true
@@ -119,17 +146,27 @@ du -sh "${SERVER_DIR}"/*/ "${SERVER_DIR}"/.* 2>/dev/null | sort -rh | head -20
 echo "--- 前 15 大文件 ---"
 find "${SERVER_DIR}" -type f -exec du -h {} + 2>/dev/null | sort -rh | head -15
 
+# ── 打包 ──────────────────────────────────────────────────────────────
+# manifest 的 platform 必须与包内原生二进制一致（包里有 better-sqlite3 的 .node，
+# 不能声明 all）。仓库里那份是 x86 默认值，这里按目标架构改写，打完再还原 ——
+# 否则一次构建就会把 manifest 的改动写进版本库。
+MANIFEST_BAK="${MANIFEST}.build-bak"
+cp "${MANIFEST}" "${MANIFEST_BAK}"
+restore_manifest() {
+    [ -f "${MANIFEST_BAK}" ] && mv -f "${MANIFEST_BAK}" "${MANIFEST}"
+}
+trap restore_manifest EXIT
+
+sed "s/^platform=.*/platform=${FNOS_PLATFORM}/" "${MANIFEST}" > "${MANIFEST}.new"
+mv "${MANIFEST}.new" "${MANIFEST}"
+echo "已写入 manifest: $(grep '^platform=' "${MANIFEST}")"
+
 # 下载 fnpack 工具（如未安装）
+FNPACK_VERSION="1.2.3"
 if ! command -v fnpack &> /dev/null; then
-    echo "下载 fnpack 工具..."
-    FNPACK_VERSION="1.2.1"
-    FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-windows-amd64"
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-linux-amd64"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-darwin-amd64"
-    fi
-    curl -o "${APP_DIR}/fnpack" "${FNPACK_URL}"
+    echo "下载 fnpack ${FNPACK_VERSION} (${FNPACK_ARCH})..."
+    FNPACK_URL="https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-${FNPACK_ARCH}"
+    curl -fL -o "${APP_DIR}/fnpack" "${FNPACK_URL}"
     chmod +x "${APP_DIR}/fnpack"
     FNPACK_CMD="${APP_DIR}/fnpack"
 else

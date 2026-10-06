@@ -1,88 +1,147 @@
 #!/bin/bash
+# 电表数据管理 —— 生命周期脚本（start / stop / status）
+#
+# 目录约定（全部走飞牛注入的环境变量，不硬编码路径）：
+#   TRIM_APPDEST  应用安装目录，升级时整体替换 → 只能放代码
+#   TRIM_PKGVAR   应用数据目录，重启与升级都保留 → 数据库、备份、日志都放这里
+#
+# 数据库写进安装目录是错的：升级会把 target 整个换掉，用户几年的抄表记录会一起没。
+
+set -u
+
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
-
-export PATH=/usr/local/node/bin:$PATH
-export ELEC_DB_PATH="${TRIM_PKGVAR}/elec.db"
-
-CMD="cd ${TRIM_APPDEST}/server && NODE_ENV=production PORT=16543 ELEC_DB_PATH=${TRIM_PKGVAR}/elec.db node server.js"
+NODE_RUNTIME="/var/apps/nodejs_v22/target/bin"
+PORT="${TRIM_SERVICE_PORT:-16543}"
 
 log_msg() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> ${LOG_FILE}
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "${LOG_FILE}"
+}
+
+# 脚本失败时，把「用户看得懂、能照着做」的一句话写进 TRIM_TEMP_LOGFILE，
+# 飞牛会把它显示在应用中心。否则用户只看到「启动失败」，无从下手。
+fail() {
+    echo "$1" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    log_msg "ERROR: $1"
+    exit 1
+}
+
+check_process() {
+    local pid="$1"
+    kill -0 "${pid}" 2>/dev/null || return 1
+    # 已退出但父 shell 还没回收的僵尸进程，kill -0 依然返回成功。
+    # 不排掉它，「起来就崩」会被误判成启动成功。
+    if [ -r "/proc/${pid}/stat" ]; then
+        local state
+        state=$(awk '{print $3}' "/proc/${pid}/stat" 2>/dev/null)
+        [ "${state}" = "Z" ] && return 1
+    fi
+    return 0
+}
+
+status() {
+    [ -f "${PID_FILE}" ] || return 1
+    local pid
+    pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    if [ -z "${pid}" ] || ! check_process "${pid}"; then
+        rm -f "${PID_FILE}"
+        return 1
+    fi
+    return 0
 }
 
 start_process() {
     if status; then
+        log_msg "already running, skip start"
         return 0
     fi
-    log_msg "Starting process ..."
-    mkdir -p "${TRIM_PKGVAR}"
-    bash -c "${CMD}" >> ${LOG_FILE} 2>&1 &
-    printf "%s" "$!" > ${PID_FILE}
-    return 0
+
+    # Node 运行时由 manifest 的 install_dep_apps=nodejs_v22 提供，不在系统 PATH 里
+    export PATH="${NODE_RUNTIME}:${PATH}"
+    command -v node > /dev/null 2>&1 \
+        || fail "未找到 Node.js 运行时（nodejs_v22）。请在应用中心确认依赖应用已安装。"
+
+    [ -f "${TRIM_APPDEST}/server/server.js" ] \
+        || fail "应用文件不完整：缺少 server/server.js，请重新安装本应用。"
+
+    mkdir -p "${TRIM_PKGVAR}/backups" \
+        || fail "无法创建数据目录 ${TRIM_PKGVAR}，请检查存储空间是否可用。"
+
+    export ELEC_DB_PATH="${TRIM_PKGVAR}/elec.db"
+    export ELEC_BACKUP_DIR="${TRIM_PKGVAR}/backups"
+
+    log_msg "starting: run-as=$(id -un) port=${PORT} db=${ELEC_DB_PATH} node=$(command -v node)"
+
+    # 直接以 server.js 的绝对路径启动：standalone 的 server.js 会自己 chdir 到
+    # 所在目录，不需要外层 cd，也就少一层引号地狱。
+    # exec 让 $! 就是真正的 node 进程，stop 时发的信号能直接落到它身上。
+    # HOSTNAME 必须显式给：不写的话可能继承到 shell 的主机名，
+    # Next 会拿它当监听地址，结果是只绑到某个具体 IP 而不是全部网卡。
+    local cmd="exec env NODE_ENV=production PORT=${PORT} HOSTNAME=0.0.0.0"
+    cmd="${cmd} ELEC_DB_PATH=${ELEC_DB_PATH} ELEC_BACKUP_DIR=${ELEC_BACKUP_DIR}"
+    cmd="${cmd} node ${TRIM_APPDEST}/server/server.js"
+
+    bash -c "${cmd}" >> "${LOG_FILE}" 2>&1 &
+    printf "%s" "$!" > "${PID_FILE}"
+
+    # 起来后立刻确认一次。端口被占、原生模块加载失败这类问题会马上退出，
+    # 不检查的话应用中心显示「运行中」，用户却打不开页面。
+    local count=0
+    while [ ${count} -lt 5 ]; do
+        sleep 1
+        if status; then
+            log_msg "started, pid=$(cat "${PID_FILE}")"
+            return 0
+        fi
+        count=$((count + 1))
+    done
+
+    fail "服务启动失败（端口 ${PORT} 可能被占用，或数据目录不可写）。详见 ${LOG_FILE}。"
 }
 
 stop_process() {
-    log_msg "Stopping process ..."
-    if [ -r "${PID_FILE}" ]; then
-        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
-        if ! check_process "${pid}"; then
-            rm -f "${PID_FILE}"
-            return
-        fi
-        log_msg "send TERM signal to PID:${pid}..."
-        kill -TERM ${pid} >> ${LOG_FILE} 2>&1
-        local count=0
-        while check_process "${pid}" && [ $count -lt 10 ]; do
-            sleep 1
-            count=$((count + 1))
-        done
-        if check_process "${pid}"; then
-            log_msg "send KILL signal to PID:${pid}..."
-            kill -KILL "${pid}"
-            sleep 1
-            rm -f "${PID_FILE}"
-        fi
+    log_msg "stopping process ..."
+    [ -r "${PID_FILE}" ] || return 0
+
+    local pid
+    pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    if [ -z "${pid}" ] || ! check_process "${pid}"; then
+        rm -f "${PID_FILE}"
+        return 0
     fi
+
+    kill -TERM "${pid}" >> "${LOG_FILE}" 2>&1
+    local count=0
+    while check_process "${pid}" && [ ${count} -lt 10 ]; do
+        sleep 1
+        count=$((count + 1))
+    done
+
+    if check_process "${pid}"; then
+        log_msg "TERM 超时，改用 KILL"
+        kill -KILL "${pid}" >> "${LOG_FILE}" 2>&1
+        sleep 1
+    fi
+
+    rm -f "${PID_FILE}"
     return 0
 }
 
-check_process() {
-    local pid=$1
-    if kill -0 "${pid}" 2>/dev/null; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-status() {
-    if [ -f "${PID_FILE}" ]; then
-        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
-        if check_process "${pid}"; then
-            return 0
+case "$1" in
+    start)
+        start_process
+        ;;
+    stop)
+        stop_process
+        ;;
+    status)
+        if status; then
+            exit 0
         else
-            rm -f "${PID_FILE}"
+            exit 3
         fi
-    fi
-    return 1
-}
-
-case $1 in
-start)
-    start_process
-    ;;
-stop)
-    stop_process
-    ;;
-status)
-    if status; then
-        exit 0
-    else
-        exit 3
-    fi
-    ;;
-*)
-    exit 1
-    ;;
+        ;;
+    *)
+        fail "未知参数：$1（可用：start / stop / status）"
+        ;;
 esac

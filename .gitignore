@@ -26,6 +26,9 @@ jwt_secret
 
 # fnOS build output (recreated by build.sh)
 fnos/App.Native.ElecMeter/app/server/
+fnos/App.Native.ElecMeter/*.fpk
+fnos/App.Native.ElecMeter/manifest.build-bak
+fnos/fnpack
 fnos/fnpack.exe
 fnpack-*-windows-amd64
 

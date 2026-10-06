@@ -1,207 +1,72 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Line } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-} from "chart.js";
-import { Reading } from "@/types";
+import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend
-);
+import { annualChartRows, annualSeries } from "@/lib/chart-data";
+import { fmtKwh, fmtMoney } from "@/lib/format";
+import type { Reading } from "@/types";
 
-export function AnnualAnalysisChart() {
-  const [readings, setReadings] = useState<Reading[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [rate, setRate] = useState(0.56);
+/** 年份线色：与设计令牌的 5 个图表色对齐，超过 5 年后循环使用 */
+const YEAR_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)"];
 
-  useEffect(() => {
-    fetchReadings();
-    fetchSettings();
-  }, []);
+/**
+ * 「年度深度分析」：按年对比逐月用电量。
+ *
+ * 某年某月没抄表时该点为 null，`connectNulls` 保持默认的 false —— 曲线会断开，
+ * 与「这个月真的用了 0 度」区分开。这是原实现里 chart.js 用 null 表达的同一件事。
+ */
+export function AnnualAnalysisChart({ readings, rate }: { readings: Reading[]; rate: number }) {
+  const series = annualSeries(readings);
+  if (series.years.length === 0) return null;
 
-  async function fetchReadings() {
-    try {
-      const response = await fetch("/api/readings");
-      const data = await response.json();
-      setReadings(data);
-    } catch (error) {
-      console.error("获取读数失败:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchSettings() {
-    try {
-      const response = await fetch("/api/settings");
-      const data = await response.json();
-      if (data.rate_per_kwh) {
-        setRate(parseFloat(data.rate_per_kwh));
-      }
-    } catch (error) {
-      console.error("获取设置失败:", error);
-    }
-  }
-
-  if (loading) {
-    return <div className="text-center py-4">加载中...</div>;
-  }
-
-  if (readings.length === 0) {
-    return <div className="text-center py-4 text-gray-500">暂无读数数据</div>;
-  }
-
-  const dataByYearMonth: Record<string, Record<string, Reading>> = {};
-  const firstByYearMonth: Record<string, Record<string, Reading>> = {};
-  readings.forEach(r => {
-    const yearMonth = r.reading_date.substring(0, 7);
-    const year = yearMonth.substring(0, 4);
-    
-    if (!dataByYearMonth[year]) {
-      dataByYearMonth[year] = {};
-      firstByYearMonth[year] = {};
-    }
-    
-    const month = yearMonth.substring(5, 7);
-    if (!dataByYearMonth[year][month] || r.reading_date > dataByYearMonth[year][month].reading_date) {
-      dataByYearMonth[year][month] = r;
-    }
-    if (!firstByYearMonth[year][month] || r.reading_date < firstByYearMonth[year][month].reading_date) {
-      firstByYearMonth[year][month] = r;
-    }
-  });
-
-  const years = Object.keys(dataByYearMonth).sort();
-
-  const allMonths = new Set<string>();
-  Object.values(dataByYearMonth).forEach(yearData => {
-    Object.keys(yearData).forEach(month => allMonths.add(month));
-  });
-  const sortedMonths = Array.from(allMonths).sort();
-  const monthLabels = sortedMonths.map(m => `${m}月`);
-
-  let maxUsage = 0;
-  const datasets = years.map((year, yearIndex) => {
-    const colors = [
-      { border: "rgb(59, 130, 246)", bg: "rgba(59, 130, 246, 0.1)" },
-      { border: "rgb(239, 68, 68)", bg: "rgba(239, 68, 68, 0.1)" },
-      { border: "rgb(34, 197, 94)", bg: "rgba(34, 197, 94, 0.1)" },
-      { border: "rgb(168, 85, 247)", bg: "rgba(168, 85, 247, 0.1)" },
-      { border: "rgb(251, 146, 60)", bg: "rgba(251, 146, 60, 0.1)" },
-    ];
-    const colorIndex = yearIndex % colors.length;
-
-    const monthData = sortedMonths.map((month, monthIndex) => {
-      const currentReading = dataByYearMonth[year]?.[month];
-      if (!currentReading) return null;
-
-      const prevMonth = monthIndex > 0 ? sortedMonths[monthIndex - 1] : null;
-      const prevReading = prevMonth ? dataByYearMonth[year]?.[prevMonth] : null;
-
-      let consumed: number;
-      if (prevReading) {
-        consumed = currentReading.reading_value - prevReading.reading_value;
-      } else {
-        const firstReading = firstByYearMonth[year]?.[month];
-        const baseline = firstReading?.previous_reading ?? 0;
-        consumed = currentReading.reading_value - baseline;
-      }
-
-      const val = Math.max(0, consumed);
-      if (val > maxUsage) maxUsage = val;
-      return val;
-    });
-
-    return {
-      label: year,
-      data: monthData,
-      borderColor: colors[colorIndex].border,
-      backgroundColor: colors[colorIndex].bg,
-      borderWidth: 2,
-      tension: 0.3,
-      fill: false,
-      yAxisID: "y",
-    };
-  });
-
-  const chartData = {
-    labels: monthLabels,
-    datasets,
-  };
-
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: "top" as const,
-      },
-      title: {
-        display: true,
-        text: "年度对比",
-      },
-      tooltip: {
-        callbacks: {
-          label: function(context: { dataset: { label?: string }; parsed: { y: number | null } }) {
-            const usage = context.parsed.y;
-            if (usage === null) return "";
-            const cost = (usage * rate).toFixed(2);
-            return `${context.dataset.label}: ${usage.toFixed(1)} 度 (¥${cost})`;
-          },
-        },
-      },
-    },
-    scales: {
-      x: {
-        grid: {
-          display: false,
-        },
-      },
-      y: {
-        type: "linear" as const,
-        display: true,
-        position: "left" as const,
-        beginAtZero: true,
-        title: {
-          display: true,
-          text: "月用电量 (度)",
-        },
-      },
-      y1: {
-        type: "linear" as const,
-        display: true,
-        position: "right" as const,
-        beginAtZero: true,
-        max: Math.ceil(maxUsage * rate),
-        title: {
-          display: true,
-          text: "月电费 (元)",
-        },
-        grid: {
-          drawOnChartArea: false,
-        },
-      },
-    },
-  };
+  const rows = annualChartRows(series);
 
   return (
-    <div className="h-[400px]">
-      <Line data={chartData} options={options} />
+    <div className="h-[360px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={rows} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            width={48}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "var(--popover)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-md)",
+              fontSize: 12,
+              color: "var(--popover-foreground)",
+            }}
+            labelStyle={{ color: "var(--muted-foreground)" }}
+            formatter={(value: number, name: string) => [
+              `${fmtKwh(value)} 度 · ${fmtMoney(value * rate)}`,
+              name,
+            ]}
+          />
+          <Legend wrapperStyle={{ fontSize: 12, color: "var(--muted-foreground)" }} />
+          {series.years.map((y, i) => (
+            <Line
+              key={y.year}
+              type="monotone"
+              dataKey={y.year}
+              name={y.year}
+              stroke={YEAR_COLORS[i % YEAR_COLORS.length]}
+              strokeWidth={2}
+              dot={{ r: 3 }}
+              activeDot={{ r: 5 }}
+            />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   );
 }

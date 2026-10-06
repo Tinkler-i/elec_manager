@@ -1,154 +1,192 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Reading } from "@/types";
-import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Check } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Gauge,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
-const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+import { ConfirmDialog } from "@/components/layout/confirm-dialog";
+import { EmptyState } from "@/components/layout/empty-state";
+import { LoadError } from "@/components/layout/load-error";
+import { PageHeader } from "@/components/layout/page-header";
+import { SkeletonRows } from "@/components/layout/skeleton-bar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { errText, readingsApi, settingsApi } from "@/lib/api";
+import { fmtMoney, fmtNumber, today } from "@/lib/format";
+import { useAsyncAll } from "@/lib/use-async-data";
+import type { Reading } from "@/types";
+import { cn } from "@/lib/utils";
 
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];
+const EMPTY_READINGS: Reading[] = [];
+
+const SOURCE_META: Record<Reading["source"], { label: string; className: string }> = {
+  manual: { label: "手工", className: "bg-muted text-muted-foreground" },
+  mcp: { label: "AI", className: "bg-violet-500/15 text-violet-700 dark:text-violet-300" },
+  import: { label: "导入", className: "bg-amber-500/15 text-amber-700 dark:text-amber-300" },
+};
+
+interface FormState {
+  reading_value: string;
+  reading_date: string;
+  reading_time: string;
+  notes: string;
+}
+
+const emptyForm = (): FormState => ({
+  reading_value: "",
+  reading_date: today(),
+  reading_time: "",
+  notes: "",
+});
+
+/**
+ * 读数记录。
+ *
+ * 取数交给 useAsyncAll（首屏骨架 / 错误重试 / 后台刷新三态分明），写操作之后
+ * 用 `reload()` 的返回值区分「写失败」与「写成功但列表没刷上」—— 后者若报成
+ * 失败，用户会再点一次，于是多出一条重复读数。
+ */
 export default function ReadingsPage() {
-  const [readings, setReadings] = useState<Reading[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll({
+    readings: readingsApi.list,
+    settings: settingsApi.get,
+  });
+
+  const readings = values.readings ?? EMPTY_READINGS;
+  const rate = Number(values.settings?.rate_per_kwh ?? 0.56);
+  const initialReading = Number(values.settings?.initial_reading ?? 0);
+
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingReading, setEditingReading] = useState<Reading | null>(null);
-  const [rate, setRate] = useState(0.56);
-  const [initialReading, setInitialReading] = useState(0);
+  const [editing, setEditing] = useState<Reading | null>(null);
+  const [form, setForm] = useState<FormState>(emptyForm);
+  const [submitting, setSubmitting] = useState(false);
+
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [jumpTo, setJumpTo] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [formData, setFormData] = useState({
-    reading_value: "",
-    reading_date: new Date().toISOString().split("T")[0],
-    reading_time: "",
-    notes: "",
-  });
 
-  useEffect(() => {
-    fetchReadings();
-    fetchSettings();
-  }, []);
+  const [pendingDelete, setPendingDelete] = useState<{ ids: string[]; label: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  async function fetchReadings() {
-    try {
-      const response = await fetch("/api/readings");
-      const data = await response.json();
-      setReadings(data);
-    } catch (error) {
-      console.error("获取读数失败:", error);
-    } finally {
-      setLoading(false);
-    }
+  const prevReadingForPreview = useMemo(() => {
+    if (!dialogOpen) return undefined;
+    return readings
+      .filter((r) => r.reading_date < form.reading_date)
+      .sort((a, b) => b.reading_date.localeCompare(a.reading_date))[0];
+  }, [readings, form.reading_date, dialogOpen]);
+
+  const baseValue = prevReadingForPreview ? prevReadingForPreview.reading_value : initialReading;
+  const previewUnits = form.reading_value ? Math.max(0, parseFloat(form.reading_value) - baseValue) : 0;
+
+  const totalPages = Math.max(1, Math.ceil(readings.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const pagedReadings = readings.slice(safePage * pageSize, (safePage + 1) * pageSize);
+  const allPagedSelected =
+    pagedReadings.length > 0 && pagedReadings.every((r) => selectedIds.has(r.id));
+
+  function openCreate() {
+    setEditing(null);
+    setForm(emptyForm());
+    setDialogOpen(true);
   }
 
-  async function fetchSettings() {
-    try {
-      const response = await fetch("/api/settings");
-      if (!response.ok) {
-        console.error("获取设置失败:", response.status);
-        return;
-      }
-      const data = await response.json();
-      if (data.rate_per_kwh) {
-        setRate(parseFloat(data.rate_per_kwh));
-      }
-      if (data.initial_reading !== undefined) {
-        setInitialReading(parseFloat(data.initial_reading));
-      }
-    } catch (error) {
-      console.error("获取设置失败:", error);
-    }
+  function openEdit(reading: Reading) {
+    setEditing(reading);
+    setForm({
+      reading_value: String(reading.reading_value),
+      reading_date: reading.reading_date,
+      reading_time: reading.reading_time ?? "",
+      notes: reading.notes ?? "",
+    });
+    setDialogOpen(true);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     try {
-      const url = editingReading
-        ? `/api/readings/${editingReading.id}`
-        : "/api/readings";
-      const method = editingReading ? "PUT" : "POST";
+      const payload = {
+        reading_value: parseFloat(form.reading_value),
+        reading_date: form.reading_date,
+        reading_time: form.reading_time || null,
+        notes: form.notes || null,
+      };
+      if (editing) await readingsApi.update(editing.id, payload);
+      else await readingsApi.create(payload);
 
-      const response = await fetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          reading_value: parseFloat(formData.reading_value),
-          reading_date: formData.reading_date,
-          reading_time: formData.reading_time || null,
-          notes: formData.notes || null,
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error);
-      }
-
-      toast.success(editingReading ? "读数已更新" : "读数已添加");
+      // 写成功了。列表刷新失败要单独说，不能吞掉也不能报成"写入失败"
+      const refreshed = await reload();
+      toast.success(
+        refreshed
+          ? editing
+            ? "读数已更新"
+            : "读数已添加"
+          : "已保存，但列表刷新失败，请手动刷新页面",
+      );
       setDialogOpen(false);
-      setEditingReading(null);
-      setFormData({
-        reading_value: "",
-        reading_date: new Date().toISOString().split("T")[0],
-        reading_time: "",
-        notes: "",
-      });
-      fetchReadings();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "操作失败");
+      setEditing(null);
+      setForm(emptyForm());
+    } catch (err) {
+      toast.error(errText(err));
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("确定要删除这条读数记录吗？")) return;
-
+  async function confirmDelete() {
+    if (!pendingDelete || deleting) return;
+    setDeleting(true);
     try {
-      const response = await fetch(`/api/readings/${id}`, {
-        method: "DELETE",
-      });
-
-      if (!response.ok) throw new Error("删除失败");
-
-      toast.success("读数已删除");
-      fetchReadings();
-    } catch (error) {
-      toast.error("删除失败");
-    }
-  }
-
-  async function handleBatchDelete() {
-    if (selectedIds.size === 0) return;
-    if (!confirm(`确定要删除选中的 ${selectedIds.size} 条记录吗？`)) return;
-
-    try {
-      const response = await fetch("/api/readings/batch-delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: Array.from(selectedIds) }),
-      });
-
-      if (!response.ok) throw new Error("批量删除失败");
-
-      const result = await response.json();
-      toast.success(`已删除 ${result.deleted} 条记录`);
+      if (pendingDelete.ids.length === 1) {
+        await readingsApi.remove(pendingDelete.ids[0]);
+      } else {
+        await readingsApi.removeMany(pendingDelete.ids);
+      }
       setSelectedIds(new Set());
-      setPage(0);
-      fetchReadings();
-    } catch (error) {
-      toast.error("批量删除失败");
+      const refreshed = await reload();
+      toast.success(refreshed ? "已删除" : "已删除，但列表刷新失败，请手动刷新页面");
+      setPendingDelete(null);
+    } catch (err) {
+      toast.error(errText(err));
+    } finally {
+      setDeleting(false);
     }
   }
 
   function toggleSelect(id: string) {
-    setSelectedIds(prev => {
+    setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -157,246 +195,345 @@ export default function ReadingsPage() {
   }
 
   function toggleSelectAll() {
-    const pagedIds = pagedReadings.map(r => r.id);
-    const allSelected = pagedIds.every(id => selectedIds.has(id));
-    if (allSelected) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        pagedIds.forEach(id => next.delete(id));
-        return next;
-      });
-    } else {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        pagedIds.forEach(id => next.add(id));
-        return next;
-      });
-    }
-  }
-
-  function handleEdit(reading: Reading) {
-    setEditingReading(reading);
-    setFormData({
-      reading_value: String(reading.reading_value),
-      reading_date: reading.reading_date,
-      reading_time: reading.reading_time || "",
-      notes: reading.notes || "",
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      pagedReadings.forEach((r) => (allPagedSelected ? next.delete(r.id) : next.add(r.id)));
+      return next;
     });
-    setDialogOpen(true);
   }
-
-  const prevReadingForPreview = useMemo(() => {
-    if (!dialogOpen) return undefined;
-    return readings
-      .filter(r => r.reading_date < formData.reading_date)
-      .sort((a, b) => b.reading_date.localeCompare(a.reading_date))[0];
-  }, [readings, formData.reading_date, dialogOpen]);
-
-  const baseValue = prevReadingForPreview ? prevReadingForPreview.reading_value : initialReading;
-  const previewUnits = formData.reading_value
-    ? Math.max(0, parseFloat(formData.reading_value) - baseValue)
-    : 0;
-  const previewCost = previewUnits * rate;
-
-  const totalPages = Math.ceil(readings.length / pageSize);
-  const pagedReadings = readings.slice(page * pageSize, (page + 1) * pageSize);
 
   function handleJumpToPage() {
     const num = parseInt(jumpTo, 10);
-    if (!isNaN(num) && num >= 1 && num <= totalPages) {
+    if (!Number.isNaN(num) && num >= 1 && num <= totalPages) {
       setPage(num - 1);
       setJumpTo("");
     }
   }
 
+  if (isInitialFailed) {
+    return (
+      <>
+        <PageHeader title="读数记录" />
+        <LoadError className="py-24" error={errors.readings} onRetry={reload} />
+      </>
+    );
+  }
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">读数记录</h1>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger render={<Button />}>
-            <Plus className="w-4 h-4 mr-2" />
-            添加读数
-          </DialogTrigger>
-          <DialogContent showOverlay={!editingReading}>
-            <DialogHeader>
-              <DialogTitle>{editingReading ? "编辑读数" : "添加读数"}</DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <Label htmlFor="reading_value">表读数</Label>
-                <Input
-                  id="reading_value"
-                  type="number"
-                  step="0.01"
-                  value={formData.reading_value}
-                  onChange={(e) => setFormData({ ...formData, reading_value: e.target.value })}
-                  required
-                />
-              </div>
-              {formData.reading_value && (
-                <div className="p-3 bg-gray-50 rounded-lg text-sm">
-                  <div>上次读数：{prevReadingForPreview ? prevReadingForPreview.reading_value : initialReading}</div>
-                  <div>上次日期：{prevReadingForPreview ? prevReadingForPreview.reading_date : '初始读数'}</div>
-                  <div>本次用电：{previewUnits.toFixed(2)} 度</div>
-                  <div>预计费用：¥{previewCost.toFixed(2)}</div>
+    <div className="space-y-5">
+      <PageHeader
+        title="读数记录"
+        description={readings.length > 0 ? `共 ${fmtNumber(readings.length, 0)} 条` : "记录每次抄表的表读数"}
+        actions={
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger render={<Button />} onClick={openCreate}>
+              <Plus />
+              添加读数
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>{editing ? "编辑读数" : "添加读数"}</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="reading_value">表读数</Label>
+                  <Input
+                    id="reading_value"
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={form.reading_value}
+                    onChange={(e) => setForm({ ...form, reading_value: e.target.value })}
+                    required
+                    autoFocus
+                  />
                 </div>
-              )}
-              <div>
-                <Label htmlFor="reading_date">读数日期</Label>
-                <Input
-                  id="reading_date"
-                  type="date"
-                  value={formData.reading_date}
-                  onChange={(e) => setFormData({ ...formData, reading_date: e.target.value })}
-                  required
-                />
-              </div>
-              <div>
-                <Label htmlFor="reading_time">记录时间（可选）</Label>
-                <Input
-                  id="reading_time"
-                  type="time"
-                  value={formData.reading_time}
-                  onChange={(e) => setFormData({ ...formData, reading_time: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="notes">备注</Label>
-                <Textarea
-                  id="notes"
-                  value={formData.notes}
-                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                />
-              </div>
-              <Button type="submit" className="w-full">
-                {editingReading ? "更新" : "添加"}
-              </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
-      </div>
+
+                {form.reading_value ? (
+                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-muted p-3 text-xs">
+                    <div>
+                      <div className="text-muted-foreground">上次读数</div>
+                      <div className="font-medium tabular-nums">{fmtNumber(baseValue, 2)}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">上次日期</div>
+                      <div className="font-medium">
+                        {prevReadingForPreview ? prevReadingForPreview.reading_date : "初始读数"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">本次用电</div>
+                      <div className="font-medium tabular-nums">{fmtNumber(previewUnits, 2)} 度</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">预计费用</div>
+                      <div className="font-medium tabular-nums">{fmtMoney(previewUnits * rate)}</div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reading_date">读数日期</Label>
+                    <Input
+                      id="reading_date"
+                      type="date"
+                      value={form.reading_date}
+                      onChange={(e) => setForm({ ...form, reading_date: e.target.value })}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="reading_time">记录时间（可选）</Label>
+                    <Input
+                      id="reading_time"
+                      type="time"
+                      value={form.reading_time}
+                      onChange={(e) => setForm({ ...form, reading_time: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="notes">备注</Label>
+                  <Textarea
+                    id="notes"
+                    value={form.notes}
+                    onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                    maxLength={500}
+                  />
+                </div>
+
+                <Button type="submit" className="w-full" disabled={submitting}>
+                  {submitting ? "保存中..." : editing ? "更新" : "添加"}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+        }
+      />
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <CardTitle>历史读数</CardTitle>
-            {selectedIds.size > 0 && (
-              <Button variant="destructive" size="sm" onClick={handleBatchDelete}>
-                <Trash2 className="w-4 h-4 mr-1" />
+            {selectedIds.size > 0 ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() =>
+                  setPendingDelete({
+                    ids: Array.from(selectedIds),
+                    label: `选中的 ${selectedIds.size} 条记录`,
+                  })
+                }
+              >
+                <Trash2 />
                 删除选中 ({selectedIds.size})
               </Button>
-            )}
+            ) : null}
           </div>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="text-center py-4">加载中...</div>
+          {isInitialLoading ? (
+            <SkeletonRows rows={6} />
           ) : readings.length === 0 ? (
-            <div className="text-center py-4 text-gray-500">暂无读数记录</div>
+            <EmptyState
+              icon={Gauge}
+              title="还没有读数记录"
+              description="添加第一条读数后，仪表盘与数据分析就有数据了。"
+              action={
+                <Button size="sm" onClick={openCreate}>
+                  <Plus />
+                  添加读数
+                </Button>
+              }
+            />
           ) : (
             <>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">
-                      <button onClick={toggleSelectAll} className="flex items-center justify-center w-4 h-4 border rounded">
-                        {pagedReadings.length > 0 && pagedReadings.every(r => selectedIds.has(r.id)) && <Check className="w-3 h-3" />}
-                      </button>
-                    </TableHead>
-                    <TableHead>日期</TableHead>
-                    <TableHead>时间</TableHead>
-                    <TableHead>来源</TableHead>
-                    <TableHead>表读数</TableHead>
-                    <TableHead>备注</TableHead>
-                    <TableHead className="text-right">操作</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagedReadings.map((reading) => (
-                    <TableRow key={reading.id}>
-                      <TableCell>
+              <div className="hide-scrollbar -mx-4 overflow-x-auto px-4">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10">
                         <button
-                          onClick={() => toggleSelect(reading.id)}
-                          className="flex items-center justify-center w-4 h-4 border rounded"
+                          type="button"
+                          onClick={toggleSelectAll}
+                          aria-label="全选本页"
+                          className={cn(
+                            "grid size-4 place-items-center rounded border transition-colors",
+                            allPagedSelected
+                              ? "border-primary bg-primary text-primary-foreground"
+                              : "border-input hover:border-foreground/40",
+                          )}
                         >
-                          {selectedIds.has(reading.id) && <Check className="w-3 h-3" />}
+                          {allPagedSelected ? <Check className="size-3" /> : null}
                         </button>
-                      </TableCell>
-                      <TableCell>{reading.reading_date}</TableCell>
-                      <TableCell>{reading.reading_time || "-"}</TableCell>
-                      <TableCell>
-                        {reading.source === 'mcp' ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">AI</span>
-                        ) : reading.source === 'import' ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-700">导入</span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">手工</span>
-                        )}
-                      </TableCell>
-                      <TableCell>{reading.reading_value}</TableCell>
-                      <TableCell>{reading.notes || "-"}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(reading)}>
-                          <Pencil className="w-4 h-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleDelete(reading.id)}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </TableCell>
+                      </TableHead>
+                      <TableHead>日期</TableHead>
+                      <TableHead>时间</TableHead>
+                      <TableHead>来源</TableHead>
+                      <TableHead className="text-right">表读数</TableHead>
+                      <TableHead className="text-right">用电</TableHead>
+                      <TableHead>备注</TableHead>
+                      <TableHead className="w-20 text-right">操作</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <div className="flex items-center justify-between mt-4 flex-wrap gap-3">
+                  </TableHeader>
+                  <TableBody>
+                    {pagedReadings.map((reading) => {
+                      const meta = SOURCE_META[reading.source] ?? SOURCE_META.manual;
+                      return (
+                        <TableRow key={reading.id}>
+                          <TableCell>
+                            <button
+                              type="button"
+                              onClick={() => toggleSelect(reading.id)}
+                              aria-label={`选择 ${reading.reading_date} 的读数`}
+                              className={cn(
+                                "grid size-4 place-items-center rounded border transition-colors",
+                                selectedIds.has(reading.id)
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-input hover:border-foreground/40",
+                              )}
+                            >
+                              {selectedIds.has(reading.id) ? <Check className="size-3" /> : null}
+                            </button>
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap tabular-nums">{reading.reading_date}</TableCell>
+                          <TableCell className="text-muted-foreground">{reading.reading_time || "-"}</TableCell>
+                          <TableCell>
+                            <Badge className={cn("border-transparent", meta.className)}>{meta.label}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {fmtNumber(reading.reading_value, 2)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {fmtNumber(reading.units_consumed, 2)}
+                          </TableCell>
+                          <TableCell className="max-w-[200px] truncate text-muted-foreground" title={reading.notes ?? ""}>
+                            {reading.notes || "-"}
+                          </TableCell>
+                          <TableCell className="text-right whitespace-nowrap">
+                            <Button variant="ghost" size="icon-sm" onClick={() => openEdit(reading)} aria-label="编辑">
+                              <Pencil />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="text-destructive hover:text-destructive"
+                              aria-label="删除"
+                              onClick={() =>
+                                setPendingDelete({
+                                  ids: [reading.id],
+                                  label: `${reading.reading_date} 的读数`,
+                                })
+                              }
+                            >
+                              <Trash2 />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <select
-                    value={pageSize}
-                    onChange={(e) => { setPageSize(Number(e.target.value)); setPage(0); setSelectedIds(new Set()); }}
-                    className="border rounded px-2 py-1 text-sm"
+                  <Select
+                    value={String(pageSize)}
+                    onValueChange={(v) => {
+                      setPageSize(Number(v));
+                      setPage(0);
+                      setSelectedIds(new Set());
+                    }}
                   >
-                    {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n} 条/页</option>)}
-                  </select>
-                  <span className="text-sm text-gray-500">
-                    共 {readings.length} 条
-                  </span>
+                    <SelectTrigger size="sm" className="w-[110px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAGE_SIZE_OPTIONS.map((n) => (
+                        <SelectItem key={n} value={String(n)}>
+                          {n} 条/页
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">共 {readings.length} 条</span>
                 </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(0)}>
-                      <ChevronsLeft className="w-4 h-4" />
+
+                {totalPages > 1 ? (
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      disabled={safePage === 0}
+                      onClick={() => setPage(0)}
+                      aria-label="第一页"
+                    >
+                      <ChevronsLeft />
                     </Button>
-                    <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>
-                      <ChevronLeft className="w-4 h-4" />
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      disabled={safePage === 0}
+                      onClick={() => setPage(safePage - 1)}
+                      aria-label="上一页"
+                    >
+                      <ChevronLeft />
                     </Button>
-                    <span className="text-sm px-2">
-                      {page + 1} / {totalPages}
+                    <span className="px-1 text-xs tabular-nums">
+                      {safePage + 1} / {totalPages}
                     </span>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>
-                      <ChevronRight className="w-4 h-4" />
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      disabled={safePage >= totalPages - 1}
+                      onClick={() => setPage(safePage + 1)}
+                      aria-label="下一页"
+                    >
+                      <ChevronRight />
                     </Button>
-                    <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}>
-                      <ChevronsRight className="w-4 h-4" />
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      disabled={safePage >= totalPages - 1}
+                      onClick={() => setPage(totalPages - 1)}
+                      aria-label="最后一页"
+                    >
+                      <ChevronsRight />
                     </Button>
-                    <span className="text-sm text-gray-500">跳至</span>
-                    <input
+                    <span className="ml-1 text-xs text-muted-foreground">跳至</span>
+                    <Input
                       type="number"
                       min={1}
                       max={totalPages}
                       value={jumpTo}
                       onChange={(e) => setJumpTo(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleJumpToPage()}
+                      onKeyDown={(e) => e.key === "Enter" && handleJumpToPage()}
                       onBlur={handleJumpToPage}
-                      className="w-14 border rounded px-2 py-1 text-sm text-center"
+                      className="h-7 w-14 text-center text-xs"
+                      aria-label="跳转页码"
                     />
-                    <span className="text-sm text-gray-500">页</span>
                   </div>
-                )}
+                ) : null}
               </div>
             </>
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title="删除读数"
+        description={`确定要删除${pendingDelete?.label ?? ""}吗？删除后前后两条读数的用电量会被重新计算，此操作不可撤销。`}
+        confirmLabel="删除"
+        destructive
+        busy={deleting}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

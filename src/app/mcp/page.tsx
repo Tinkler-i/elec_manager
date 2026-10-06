@@ -1,63 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BookOpen, Copy, Check, Server, Terminal, Plug } from "lucide-react";
+import { useState } from "react";
+import { BookOpen, Check, Copy, Plug, Server, Terminal } from "lucide-react";
 import { toast } from "sonner";
 
-interface McpToolInfo {
-  name: string;
-  title: string;
-  description: string;
-  parameters: {
-    type: string;
-    properties: Record<string, { type: string; description: string }>;
-    required?: string[];
-  };
-}
+import { EmptyState } from "@/components/layout/empty-state";
+import { LoadError } from "@/components/layout/load-error";
+import { PageHeader } from "@/components/layout/page-header";
+import { SkeletonBar } from "@/components/layout/skeleton-bar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { authApi, mcpApi } from "@/lib/api";
+import { useAsyncAll } from "@/lib/use-async-data";
 
+/**
+ * MCP 服务页。
+ *
+ * 三个 Tab：远程 HTTP 接入、本地 stdio 接入、工具清单。工具清单来自
+ * `/api/mcp/tools`（后端从 mcp-tools.ts 导出），所以这里不会出现"文档写了
+ * 但实际没有"的工具。
+ */
 export default function McpPage() {
-  const [tools, setTools] = useState<McpToolInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [token, setToken] = useState("");
+  const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll({
+    tools: mcpApi.tools,
+    token: authApi.token,
+  });
+
   const [copied, setCopied] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchTools();
-    fetchToken();
-  }, []);
-
-  async function fetchTools() {
-    try {
-      const response = await fetch("/api/mcp/tools");
-      const data = await response.json();
-      setTools(data.tools || []);
-    } catch (error) {
-      console.error("获取工具列表失败:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchToken() {
-    try {
-      const response = await fetch("/api/auth/token");
-      if (!response.ok) return;
-      const data = await response.json();
-      if (data.token) setToken(data.token);
-    } catch (error) {
-      console.error("获取token失败:", error);
-    }
-  }
-
-  function getBaseUrl() {
-    if (typeof window === "undefined") return "";
-    return `${window.location.protocol}//${window.location.host}`;
-  }
 
   async function copyText(text: string, label: string) {
     try {
@@ -66,151 +38,153 @@ export default function McpPage() {
       toast.success("已复制到剪贴板");
       setTimeout(() => setCopied(null), 2000);
     } catch {
-      toast.error("复制失败");
+      // clipboard API 在非 HTTPS / 无权限时会抛错，提示里给出可用的替代做法
+      toast.error("复制失败，请手动选中复制");
     }
   }
 
-  function CopyButton({ text, label }: { text: string; label: string }) {
+  if (isInitialFailed) {
     return (
-      <Button variant="outline" size="sm" onClick={() => copyText(text, label)}>
-        {copied === label ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-      </Button>
+      <>
+        <PageHeader title="MCP 服务" />
+        <LoadError className="py-24" error={errors.tools} onRetry={reload} />
+      </>
     );
   }
 
-  const mcpUrl = `${getBaseUrl()}/api/mcp`;
+  const tools = values.tools?.tools ?? [];
+  const token = values.token?.token ?? "";
+  const baseUrl = typeof window === "undefined" ? "" : `${window.location.protocol}//${window.location.host}`;
+  const mcpUrl = `${baseUrl}/api/mcp`;
 
-  const streamableHttpConfig = JSON.stringify({
-    mcpServers: {
-      "elec-meter": {
-        url: mcpUrl,
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      },
-    },
-  }, null, 2);
-
-  const stdioConfig = JSON.stringify({
-    mcpServers: {
-      "elec-meter": {
-        command: "npx",
-        args: ["tsx", "/path/to/elec/mcp-server.ts"],
-        env: {
-          ELEC_DB_PATH: "/path/to/data/elec.db",
+  const httpConfig = JSON.stringify(
+    {
+      mcpServers: {
+        "elec-meter": {
+          url: mcpUrl,
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
         },
       },
     },
-  }, null, 2);
+    null,
+    2,
+  );
+
+  const stdioConfig = JSON.stringify(
+    {
+      mcpServers: {
+        "elec-meter": {
+          command: "npx",
+          args: ["tsx", "/path/to/elec/mcp-server.ts"],
+          env: { ELEC_DB_PATH: "/path/to/data/elec.db" },
+        },
+      },
+    },
+    null,
+    2,
+  );
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">MCP 服务</h1>
-        <Badge variant="outline" className="text-sm">
-          <Plug className="w-3 h-3 mr-1" />
-          {tools.length} 个工具
-        </Badge>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        title="MCP 服务"
+        description="让 AI 客户端直接读写电表数据"
+        actions={
+          <Badge variant="outline">
+            <Plug />
+            {isInitialLoading ? "…" : `${tools.length} 个工具`}
+          </Badge>
+        }
+      />
 
       <Tabs defaultValue="streamable">
         <TabsList>
           <TabsTrigger value="streamable">
-            <Server className="w-4 h-4 mr-2" />
+            <Server className="size-4" />
             Streamable HTTP
           </TabsTrigger>
           <TabsTrigger value="stdio">
-            <Terminal className="w-4 h-4 mr-2" />
+            <Terminal className="size-4" />
             Stdio
           </TabsTrigger>
           <TabsTrigger value="tools">
-            <BookOpen className="w-4 h-4 mr-2" />
+            <BookOpen className="size-4" />
             工具列表
           </TabsTrigger>
         </TabsList>
 
-        {/* Streamable HTTP 配置 */}
-        <TabsContent value="streamable" className="space-y-6">
+        <TabsContent value="streamable" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Streamable HTTP 连接</CardTitle>
+              <CardDescription>适用于支持远程 MCP 服务器的 AI 客户端</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <p className="text-sm text-gray-600">
-                通过标准 MCP Streamable HTTP 协议连接。适用于支持远程 MCP 服务器的 AI 客户端。
+              <Field label="MCP 端点">
+                <code className="hide-scrollbar min-w-0 flex-1 overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs">
+                  {mcpUrl || "加载中..."}
+                </code>
+                <CopyButton text={mcpUrl} label="端点" copied={copied} onCopy={copyText} />
+              </Field>
+
+              <Field label="认证 Token">
+                <code className="hide-scrollbar min-w-0 flex-1 overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs">
+                  {token || "获取中..."}
+                </code>
+                <CopyButton text={token} label="Token" copied={copied} onCopy={copyText} />
+              </Field>
+
+              <p className="text-xs text-muted-foreground">
+                请求头需带{" "}
+                <code className="rounded bg-muted px-1 font-mono">
+                  Authorization: Bearer &lt;token&gt;
+                </code>
+                。这个 Token 就是当前登录会话的凭据，修改密码或登出后会失效。
               </p>
-
-              <div>
-                <label className="text-sm font-medium text-gray-700">MCP 端点</label>
-                <div className="flex items-center gap-2 mt-1">
-                  <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-sm font-mono">
-                    {mcpUrl || "加载中..."}
-                  </code>
-                  <CopyButton text={mcpUrl} label="url" />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-gray-700">认证 Token</label>
-                <div className="flex items-center gap-2 mt-1">
-                  <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-xs font-mono overflow-auto break-all">
-                    {token || "获取中..."}
-                  </code>
-                  <CopyButton text={token} label="token" />
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  在请求头中添加 <code className="bg-gray-100 px-1 rounded">Authorization: Bearer &lt;token&gt;</code>
-                </p>
-              </div>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
               <CardTitle>客户端配置示例</CardTitle>
+              <CardDescription>Claude Desktop / Cursor / Windsurf</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Claude Desktop / Cursor / Windsurf</label>
-                <div className="flex items-start gap-2 mt-1">
-                  <pre className="flex-1 bg-gray-900 text-gray-100 p-4 rounded-lg text-xs font-mono overflow-auto">
-                    {streamableHttpConfig}
-                  </pre>
-                  <CopyButton text={streamableHttpConfig} label="http-config" />
-                </div>
+            <CardContent className="space-y-3">
+              <div className="flex items-start gap-2">
+                <pre className="hide-scrollbar min-w-0 flex-1 overflow-auto rounded-lg bg-muted p-4 font-mono text-xs">
+                  {httpConfig}
+                </pre>
+                <CopyButton text={httpConfig} label="HTTP 配置" copied={copied} onCopy={copyText} />
               </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <p className="text-sm text-blue-800">
-                  <strong>提示：</strong>请将配置中的 URL 和 Token 替换为实际值。如果使用反向代理，URL 可能需要调整。
-                </p>
-              </div>
+              <p className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-xs text-blue-700 dark:text-blue-300">
+                如果前面挂了反向代理，端点 URL 要换成外网可访问的地址，Token 保持不变。
+              </p>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Stdio 配置 */}
-        <TabsContent value="stdio" className="space-y-6">
+        <TabsContent value="stdio" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Stdio 本地连接</CardTitle>
+              <CardDescription>AI 客户端与数据库在同一台机器上时用这个</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <p className="text-sm text-gray-600">
-                通过标准输入/输出 (stdio) 在本地运行 MCP 服务器。适用于 AI 客户端与服务器在同一台机器上的场景。
-              </p>
+              <Field label="运行命令">
+                <code className="min-w-0 flex-1 overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs">
+                  npx tsx mcp-server.ts
+                </code>
+                <CopyButton
+                  text="npx tsx mcp-server.ts"
+                  label="命令"
+                  copied={copied}
+                  onCopy={copyText}
+                />
+              </Field>
 
-              <div>
-                <label className="text-sm font-medium text-gray-700">运行命令</label>
-                <div className="flex items-center gap-2 mt-1">
-                  <code className="flex-1 bg-gray-100 px-3 py-2 rounded text-sm font-mono">
-                    npx tsx mcp-server.ts
-                  </code>
-                  <CopyButton text="npx tsx mcp-server.ts" label="cmd" />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-gray-700">环境变量</label>
-                <Table className="mt-1">
+              <div className="space-y-2">
+                <div className="text-sm font-medium">环境变量</div>
+                <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>变量名</TableHead>
@@ -220,9 +194,13 @@ export default function McpPage() {
                   </TableHeader>
                   <TableBody>
                     <TableRow>
-                      <TableCell><code className="text-xs">ELEC_DB_PATH</code></TableCell>
-                      <TableCell className="text-sm">SQLite 数据库文件路径</TableCell>
-                      <TableCell><code className="text-xs">data/elec.db</code></TableCell>
+                      <TableCell>
+                        <code className="font-mono text-xs">ELEC_DB_PATH</code>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">SQLite 数据库文件路径</TableCell>
+                      <TableCell>
+                        <code className="font-mono text-xs">data/elec.db</code>
+                      </TableCell>
                     </TableRow>
                   </TableBody>
                 </Table>
@@ -233,81 +211,120 @@ export default function McpPage() {
           <Card>
             <CardHeader>
               <CardTitle>客户端配置示例</CardTitle>
+              <CardDescription>Claude Desktop / Cursor / Windsurf</CardDescription>
             </CardHeader>
             <CardContent>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Claude Desktop / Cursor / Windsurf</label>
-                <div className="flex items-start gap-2 mt-1">
-                  <pre className="flex-1 bg-gray-900 text-gray-100 p-4 rounded-lg text-xs font-mono overflow-auto">
-                    {stdioConfig}
-                  </pre>
-                  <CopyButton text={stdioConfig} label="stdio-config" />
-                </div>
+              <div className="flex items-start gap-2">
+                <pre className="hide-scrollbar min-w-0 flex-1 overflow-auto rounded-lg bg-muted p-4 font-mono text-xs">
+                  {stdioConfig}
+                </pre>
+                <CopyButton text={stdioConfig} label="Stdio 配置" copied={copied} onCopy={copyText} />
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* 工具列表 */}
-        <TabsContent value="tools" className="space-y-4">
+        <TabsContent value="tools">
           <Card>
             <CardHeader>
-              <CardTitle>可用工具 ({tools.length})</CardTitle>
+              <CardTitle>可用工具 {isInitialLoading ? "" : `(${tools.length})`}</CardTitle>
+              <CardDescription>参数与必填项由服务端定义实时导出</CardDescription>
             </CardHeader>
-            <CardContent>
-              {loading ? (
-                <div className="text-center py-4 text-gray-500">加载中...</div>
+            <CardContent className="space-y-3">
+              {isInitialLoading ? (
+                <>
+                  <SkeletonBar className="h-20 w-full" />
+                  <SkeletonBar className="h-20 w-full" />
+                </>
               ) : tools.length === 0 ? (
-                <div className="text-center py-4 text-gray-500">暂无可用工具</div>
+                <EmptyState icon={BookOpen} title="暂无可用工具" />
               ) : (
-                <div className="space-y-4">
-                  {tools.map((tool) => (
-                    <div key={tool.name} className="border rounded-lg p-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <code className="font-medium text-blue-600 text-sm">{tool.name}</code>
-                        <Badge variant="secondary" className="text-xs">{tool.title}</Badge>
-                      </div>
-                      <p className="text-sm text-gray-600 mb-3">{tool.description}</p>
-
-                      {tool.parameters.properties && Object.keys(tool.parameters.properties).length > 0 && (
-                        <div>
-                          <label className="text-xs font-medium text-gray-500">参数</label>
-                          <Table className="mt-1">
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead className="text-xs">参数名</TableHead>
-                                <TableHead className="text-xs">类型</TableHead>
-                                <TableHead className="text-xs">说明</TableHead>
-                                <TableHead className="text-xs">必填</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {Object.entries(tool.parameters.properties).map(([key, prop]) => (
-                                <TableRow key={key}>
-                                  <TableCell><code className="text-xs">{key}</code></TableCell>
-                                  <TableCell className="text-xs">{prop.type}</TableCell>
-                                  <TableCell className="text-xs">{prop.description}</TableCell>
-                                  <TableCell>
-                                    {tool.parameters.required?.includes(key) ? (
-                                      <Badge variant="destructive" className="text-xs">必填</Badge>
-                                    ) : (
-                                      <Badge variant="secondary" className="text-xs">可选</Badge>
-                                    )}
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </div>
-                      )}
+                tools.map((tool) => (
+                  <div key={tool.name} className="rounded-lg border border-border p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <code className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">
+                        {tool.name}
+                      </code>
+                      <Badge variant="secondary">{tool.title}</Badge>
                     </div>
-                  ))}
-                </div>
+                    <p className="mt-1.5 text-xs text-muted-foreground">{tool.description}</p>
+
+                    {tool.parameters.properties && Object.keys(tool.parameters.properties).length > 0 ? (
+                      <Table className="mt-3">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>参数名</TableHead>
+                            <TableHead>类型</TableHead>
+                            <TableHead>说明</TableHead>
+                            <TableHead>必填</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {Object.entries(tool.parameters.properties).map(([key, prop]) => (
+                            <TableRow key={key}>
+                              <TableCell>
+                                <code className="font-mono text-xs">{key}</code>
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{prop.type}</TableCell>
+                              <TableCell className="text-xs text-muted-foreground">{prop.description}</TableCell>
+                              <TableCell>
+                                {tool.parameters.required?.includes(key) ? (
+                                  <Badge variant="destructive">必填</Badge>
+                                ) : (
+                                  <Badge variant="secondary">可选</Badge>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    ) : null}
+                  </div>
+                ))
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+/**
+ * 复制按钮。
+ *
+ * 必须是模块级组件：写在页面组件里等于每次渲染都新建一个组件类型，React 会
+ * 把它当成另一个组件卸载重建（输入焦点、内部状态全丢），React 19 的 lint
+ * 规则也会直接报 "Cannot create components during render"。
+ */
+function CopyButton({
+  text,
+  label,
+  copied,
+  onCopy,
+}: {
+  text: string;
+  label: string;
+  copied: string | null;
+  onCopy: (text: string, label: string) => void;
+}) {
+  return (
+    <Button
+      variant="outline"
+      size="icon-sm"
+      aria-label={`复制${label}`}
+      onClick={() => onCopy(text, label)}
+    >
+      {copied === label ? <Check className="text-emerald-600 dark:text-emerald-400" /> : <Copy />}
+    </Button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="text-sm font-medium">{label}</div>
+      <div className="flex items-center gap-2">{children}</div>
     </div>
   );
 }

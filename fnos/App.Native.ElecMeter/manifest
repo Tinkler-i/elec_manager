@@ -1,11 +1,21 @@
 appname=App.Native.ElecMeter
-version=1.9.1
+version=1.9.2
 display_name=电表数据管理
 desc=电表数据管理系统，支持手动录入电表读数、自动计算用电量、数据可视化分析。
-platform=all
 source=thirdparty
 maintainer=elec-dev
+maintainer_url=https://github.com/Tinkler-i/elec_manager
 distributor=elec-dev
+
+# platform 必须与包内原生二进制一致：本包带 better-sqlite3 的 .node 模块，
+# 不能写 all（all 的含义是「包里没有任何架构相关二进制」）。
+# 仓库里这份是 x86 默认值；build.sh 与 CI 会在打包前按目标架构改写。
+platform=x86
+
+# 飞牛的 Node 运行时是独立应用包，不在系统 PATH 里。
+# 不声明这一条，装到干净的飞牛设备上会找不到 node。
+install_dep_apps=nodejs_v22
+
 os_min_version=0.9.27
 desktop_uidir=ui
 desktop_applaunchname=App.Native.ElecMeter.Application

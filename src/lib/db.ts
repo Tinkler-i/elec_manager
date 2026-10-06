@@ -4,6 +4,21 @@ import { v4 as uuidv4 } from 'uuid';
 
 const DB_PATH = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
 
+/**
+ * 数据目录：默认跟数据库放在一起。
+ *
+ * 为什么不按 `process.cwd()` 算：Next standalone 的 `server.js` 一启动就
+ * `process.chdir(__dirname)`，cwd 因此永远是**安装目录**。飞牛 fnOS 升级时会把
+ * 安装目录整体替换掉，备份写在那里会连数据一起消失；数据库在 TRIM_PKGVAR
+ * （重启与升级都保留），备份跟着它才对。
+ *
+ * Docker 下 ELEC_DB_PATH 未设置，退回 `cwd/data`，正好是 docker-compose 挂的卷。
+ */
+export const DATA_DIR = process.env.ELEC_DATA_DIR || path.dirname(DB_PATH);
+
+/** 备份目录，可用 ELEC_BACKUP_DIR 覆盖（飞牛包显式指向 TRIM_PKGVAR/backups） */
+export const BACKUP_DIR = process.env.ELEC_BACKUP_DIR || path.join(DATA_DIR, 'backups');
+
 let db: Database.Database | null = null;
 let cachedRate: number | null = null;
 let cachedInitialReading: number | null = null;

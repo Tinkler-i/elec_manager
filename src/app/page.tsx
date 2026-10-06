@@ -1,95 +1,114 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import dynamic from "next/dynamic";
+import { ChartLine, Coins, Gauge, Zap } from "lucide-react";
+
+import { UsageChart } from "@/components/charts/usage-chart";
+import { EmptyState } from "@/components/layout/empty-state";
+import { LoadError } from "@/components/layout/load-error";
+import { PageHeader } from "@/components/layout/page-header";
+import { StatCard } from "@/components/layout/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { readingsApi, settingsApi, statsApi } from "@/lib/api";
+import { fmtKwh, fmtMoney, fmtNumber } from "@/lib/format";
+import { useAsyncAll } from "@/lib/use-async-data";
+import { useHeartbeat } from "@/lib/use-heartbeat";
 
-const UsageChart = dynamic(() => import("@/components/charts/usage-chart").then(m => ({ default: m.UsageChart })), { loading: () => <div className="h-[300px] flex items-center justify-center">加载中...</div> });
+const REFRESH_MS = 30_000;
 
-interface Stats {
-  totalReadings: number;
-  totalConsumed: number;
-  totalAmount: number;
-  currentMonthConsumed: number;
-  currentMonthAmount: number;
-}
+/**
+ * 仪表盘。
+ *
+ * 三份数据一起并发取（统计 / 读数 / 设置），任一份失败不影响其余两份 ——
+ * 设置取不到时电费单价退回默认值 0.56，但用电量照常显示。
+ */
+export default function DashboardPage() {
+  const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll(
+    {
+      stats: statsApi.get,
+      readings: readingsApi.list,
+      settings: settingsApi.get,
+    },
+    [],
+    [],
+  );
 
-export default function Dashboard() {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(true);
+  // 停留期间每 30 秒重拉一次，页面切走时不刷（见 use-heartbeat）
+  useHeartbeat(() => void reload(), REFRESH_MS);
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
-
-  async function fetchStats() {
-    try {
-      const response = await fetch("/api/stats");
-      if (!response.ok) {
-        console.error("获取统计数据失败:", response.status);
-        return;
-      }
-      const data = await response.json();
-      setStats(data);
-    } catch (error) {
-      console.error("获取统计数据失败:", error);
-    } finally {
-      setLoading(false);
-    }
+  if (isInitialFailed) {
+    return (
+      <>
+        <PageHeader title="仪表盘" description="电表运行概览" />
+        <LoadError className="py-24" error={errors.stats ?? errors.readings} onRetry={reload} />
+      </>
+    );
   }
 
-  if (loading) {
-    return <div className="text-center py-8">加载中...</div>;
-  }
+  const stats = values.stats;
+  const readings = values.readings ?? [];
+  const rate = Number(values.settings?.rate_per_kwh ?? 0.56);
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-gray-900">仪表盘</h1>
+    <div className="space-y-5">
+      <PageHeader
+        title="仪表盘"
+        description={
+          stats ? `共 ${fmtNumber(stats.totalReadings, 0)} 条读数 · 单价 ${fmtMoney(rate)}/度` : "电表运行概览"
+        }
+      />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">本月用电</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.currentMonthConsumed.toFixed(1)} 度</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">本月费用</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">¥{stats?.currentMonthAmount.toFixed(2)}</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">累计用电</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.totalConsumed.toFixed(1)} 度</div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-gray-500">累计费用</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">¥{stats?.totalAmount.toFixed(2)}</div>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="本月用电"
+          value={`${fmtKwh(stats?.currentMonthConsumed)} 度`}
+          icon={Zap}
+          tone="accent"
+          loading={isInitialLoading}
+        />
+        <StatCard
+          label="本月费用"
+          value={fmtMoney(stats?.currentMonthAmount)}
+          icon={Coins}
+          tone="accent"
+          loading={isInitialLoading}
+        />
+        <StatCard
+          label="累计用电"
+          value={`${fmtKwh(stats?.totalConsumed)} 度`}
+          icon={Gauge}
+          loading={isInitialLoading}
+        />
+        <StatCard
+          label="累计费用"
+          value={fmtMoney(stats?.totalAmount)}
+          icon={ChartLine}
+          loading={isInitialLoading}
+        />
       </div>
+
+      {errors.settings ? (
+        <p className="text-xs text-amber-600 dark:text-amber-400">
+          设置读取失败，电费按默认单价 {fmtMoney(0.56)}/度 估算。
+        </p>
+      ) : null}
 
       <Card>
         <CardHeader>
           <CardTitle>用电趋势</CardTitle>
+          <p className="text-xs text-muted-foreground">最近 6 个月的日均用电量</p>
         </CardHeader>
         <CardContent>
-          <UsageChart />
+          {isInitialLoading ? (
+            <div className="h-[280px] w-full animate-pulse rounded-md bg-muted" />
+          ) : readings.length === 0 ? (
+            <EmptyState
+              icon={Gauge}
+              title="还没有读数记录"
+              description="去「读数记录」添加第一条，趋势图就会出现在这里。"
+            />
+          ) : (
+            <UsageChart readings={readings} />
+          )}
         </CardContent>
       </Card>
     </div>

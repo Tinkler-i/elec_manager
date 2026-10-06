@@ -1,4 +1,14 @@
 #!/bin/bash
-# better-sqlite3 已在 fpk 中包含完整的原生二进制，无需 rebuild
-# npm rebuild 会删除已有的 .node 文件导致模块加载失败
+# 安装后回调：准备数据目录。
+#
+# better-sqlite3 的原生 .node 已随包提供，这里刻意不做 npm rebuild
+# ——rebuild 会重新编译并覆盖掉包里的二进制，而设备上没有编译工具链。
+
+set -u
+
+mkdir -p "${TRIM_PKGVAR}/backups" || {
+    echo "无法创建数据目录 ${TRIM_PKGVAR}，请检查存储空间。" >> "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+}
+
 exit 0

@@ -120,11 +120,25 @@ jobs:
 
           find "${SERVER_DIR}" -type d -empty -delete 2>/dev/null || true
 
+      - name: Set manifest platform
+        run: |
+          # 包里带 better-sqlite3 的原生 .node，platform 不能是 all ——
+          # 否则 ARM 设备会装上 amd64 包，装完打不开。按矩阵架构写死。
+          ARCH="${{ matrix.arch }}"
+          if [ "$ARCH" = "amd64" ]; then
+            PLATFORM=x86
+          else
+            PLATFORM=arm
+          fi
+          MANIFEST="fnos/App.Native.ElecMeter/manifest"
+          sed -i "s/^platform=.*/platform=${PLATFORM}/" "$MANIFEST"
+          echo "manifest: $(grep '^platform=' "$MANIFEST")"
+
       - name: Download fnpack & Build fpk
         run: |
-          FNPACK_VERSION="1.2.1"
+          FNPACK_VERSION="1.2.3"
           FNPACK_ARCH="${{ matrix.fnpack_arch }}"
-          curl -L -o fnos/fnpack "https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-${FNPACK_ARCH}"
+          curl -fL -o fnos/fnpack "https://static2.fnnas.com/fnpack/fnpack-${FNPACK_VERSION}-${FNPACK_ARCH}"
           chmod +x fnos/fnpack
 
           cd fnos/App.Native.ElecMeter

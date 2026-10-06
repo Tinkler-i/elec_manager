@@ -1,174 +1,64 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Bar } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-} from "chart.js";
-import { Reading } from "@/types";
+import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend
-);
+import { monthlyConsumption } from "@/lib/chart-data";
+import { fmtKwh, fmtMoney } from "@/lib/format";
+import type { Reading } from "@/types";
 
-export function MonthlyComparisonChart() {
-  const [readings, setReadings] = useState<Reading[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [rate, setRate] = useState(0.56);
+/**
+ * 「月度用电对比」：最近 6 个月各用了多少度。
+ *
+ * 原来 chart.js 版本挂了一条 y1 轴标着「电费(元)」，但没有任何数据集映射到它 ——
+ * 也就是说右侧那排数字与图上的柱子毫无关系。recharts 版本去掉了它，电费改在
+ * 悬浮里给出（这本来就是唯一能用到它的地方）。
+ */
+export function MonthlyComparisonChart({ readings, rate }: { readings: Reading[]; rate: number }) {
+  const data = monthlyConsumption(readings, 6);
+  if (data.length === 0) return null;
 
-  useEffect(() => {
-    fetchReadings();
-    fetchSettings();
-  }, []);
+  const max = Math.max(...data.map((d) => d.consumed), 0);
 
-  async function fetchReadings() {
-    try {
-      const response = await fetch("/api/readings");
-      const data = await response.json();
-      setReadings(data);
-    } catch (error) {
-      console.error("获取读数失败:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function fetchSettings() {
-    try {
-      const response = await fetch("/api/settings");
-      const data = await response.json();
-      if (data.rate_per_kwh) {
-        setRate(parseFloat(data.rate_per_kwh));
-      }
-    } catch (error) {
-      console.error("获取设置失败:", error);
-    }
-  }
-
-  if (loading) {
-    return <div className="text-center py-4">加载中...</div>;
-  }
-
-  if (readings.length === 0) {
-    return <div className="text-center py-4 text-gray-500">暂无读数数据</div>;
-  }
-
-  const lastReadingOfMonth = readings.reduce((acc, r) => {
-    const month = r.reading_date.substring(0, 7);
-    if (!acc[month] || r.reading_date > acc[month].reading_date) {
-      acc[month] = r;
-    }
-    return acc;
-  }, {} as Record<string, Reading>);
-
-  const firstReadingOfMonth = readings.reduce((acc, r) => {
-    const month = r.reading_date.substring(0, 7);
-    if (!acc[month] || r.reading_date < acc[month].reading_date) {
-      acc[month] = r;
-    }
-    return acc;
-  }, {} as Record<string, Reading>);
-
-  const sortedMonths = Object.keys(lastReadingOfMonth).sort();
-  
-  const monthlyData: Record<string, number> = {};
-  sortedMonths.forEach((month, index) => {
-    const currentReading = lastReadingOfMonth[month];
-    const prevReading = index > 0 ? lastReadingOfMonth[sortedMonths[index - 1]] : null;
-    
-    let consumed: number;
-    if (prevReading) {
-      consumed = currentReading.reading_value - prevReading.reading_value;
-    } else {
-      const firstReading = firstReadingOfMonth[month];
-      const baseline = firstReading?.previous_reading ?? 0;
-      consumed = currentReading.reading_value - baseline;
-    }
-    
-    monthlyData[month] = Math.max(0, consumed);
-  });
-
-  const months = sortedMonths.slice(-6);
-  const maxUsage = Math.max(...months.map(m => monthlyData[m]));
-
-  const chartData = {
-    labels: months.map(m => `${m.substring(5)}月`),
-    datasets: [
-      {
-        label: "用电量 (度)",
-        data: months.map(m => monthlyData[m]),
-        backgroundColor: "rgba(59, 130, 246, 0.7)",
-        borderColor: "rgb(59, 130, 246)",
-        borderWidth: 1,
-        yAxisID: "y",
-      },
-    ],
-  };
-
-  const options = {
-    responsive: true,
-    interaction: {
-      mode: "index" as const,
-      intersect: false,
-    },
-    plugins: {
-      legend: {
-        position: "top" as const,
-      },
-      tooltip: {
-        callbacks: {
-          label: function(context: { dataset: { label?: string }; parsed: { y: number | null }; dataIndex: number }) {
-            const usage = context.parsed.y;
-            if (usage === null) return "";
-            const cost = (usage * rate).toFixed(2);
-            return `用电: ${usage.toFixed(1)} 度 | 电费: ¥${cost}`;
-          },
-        },
-      },
-    },
-    scales: {
-      x: {
-        grid: {
-          display: false,
-        },
-      },
-      y: {
-        type: "linear" as const,
-        display: true,
-        position: "left" as const,
-        title: {
-          display: true,
-          text: "用电量 (度)",
-        },
-        beginAtZero: true,
-      },
-      y1: {
-        type: "linear" as const,
-        display: true,
-        position: "right" as const,
-        title: {
-          display: true,
-          text: "电费 (元)",
-        },
-        beginAtZero: true,
-        max: Math.ceil(maxUsage * rate),
-        grid: {
-          drawOnChartArea: false,
-        },
-      },
-    },
-  };
-
-  return <Bar data={chartData} options={options} />;
+  return (
+    <div className="h-[320px] w-full">
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            width={48}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+          />
+          <Tooltip
+            cursor={{ fill: "var(--muted)", opacity: 0.5 }}
+            contentStyle={{
+              backgroundColor: "var(--popover)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-md)",
+              fontSize: 12,
+              color: "var(--popover-foreground)",
+            }}
+            labelStyle={{ color: "var(--muted-foreground)" }}
+            formatter={(value: number) => [`${fmtKwh(value)} 度 · ${fmtMoney(value * rate)}`, "用电量"]}
+          />
+          <Bar dataKey="consumed" radius={[6, 6, 0, 0]}>
+            {/* 用电最高的那个月用主色标出来，一眼能看出峰值在哪 */}
+            {data.map((d) => (
+              <Cell
+                key={d.month}
+                fill={d.consumed === max && max > 0 ? "var(--chart-1)" : "var(--chart-3)"}
+              />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
