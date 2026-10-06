@@ -15,30 +15,22 @@
  *   3. 全新进程 B（同一数据目录）上，**第一个 HTTP 请求**就是带该 cookie 的受保护页面
  *   4. 期望 200；instrumentation 没跑起来时这里是 307 且 cookie 被清
  */
-import { spawn } from 'node:child_process';
-import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {
+  ensureStandalone,
+  killTree,
+  login,
+  startServer,
+  waitForPort,
+  waitForPortFree,
+} from './lib/postbuild-server.mjs';
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SERVER = path.join(ROOT, '.next', 'standalone', 'server.js');
 const PORT_A = 16801;
 const PORT_B = 16802;
 
-if (!fs.existsSync(SERVER)) {
-  console.error(`找不到 ${SERVER}，先跑 npm run build`);
-  process.exit(2);
-}
-
-// 新构建出来的 standalone 不带 static/public，补上，让页面能正常渲染（构建产物，不影响源码）
-for (const [src, dst] of [
-  [path.join(ROOT, '.next', 'static'), path.join(ROOT, '.next', 'standalone', '.next', 'static')],
-  [path.join(ROOT, 'public'), path.join(ROOT, '.next', 'standalone', 'public')],
-]) {
-  if (fs.existsSync(src) && !fs.existsSync(dst)) fs.cpSync(src, dst, { recursive: true });
-}
+ensureStandalone();
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'elec-coldstart-'));
 const dataDir = path.join(tmp, 'data');
@@ -46,68 +38,6 @@ const backupDir = path.join(tmp, 'backups');
 fs.mkdirSync(dataDir, { recursive: true });
 fs.mkdirSync(backupDir, { recursive: true });
 const dbPath = path.join(dataDir, 'elec.db');
-
-function startServer(port) {
-  const env = {
-    ...process.env,
-    PORT: String(port),
-    HOSTNAME: '127.0.0.1',
-    NODE_ENV: 'production',
-    ELEC_DB_PATH: dbPath,
-    ELEC_BACKUP_DIR: backupDir,
-  };
-  // 设备上 cmd/main 不注入 JWT_SECRET，必须复现这个前提，否则测不出冷启动
-  delete env.JWT_SECRET;
-  return spawn(process.execPath, [SERVER], { cwd: ROOT, env, stdio: 'ignore' });
-}
-
-function killTree(child) {
-  if (!child || child.exitCode !== null) return;
-  if (process.platform === 'win32') {
-    spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-  } else {
-    child.kill('SIGKILL');
-  }
-}
-
-/** 只探 TCP，不发 HTTP —— 任何打到 API 路由的请求都可能提前跑 auth.ts，把缺陷掩盖掉 */
-function waitForPort(port, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const tryOnce = () => {
-      const sock = net.connect({ port, host: '127.0.0.1' });
-      sock.once('connect', () => {
-        sock.destroy();
-        resolve();
-      });
-      sock.once('error', () => {
-        sock.destroy();
-        if (Date.now() > deadline) reject(new Error(`等待端口 ${port} 超时`));
-        else setTimeout(tryOnce, 150);
-      });
-    };
-    tryOnce();
-  });
-}
-
-function waitForPortFree(port, timeoutMs = 15000) {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve) => {
-    const tryOnce = () => {
-      const sock = net.connect({ port, host: '127.0.0.1' });
-      sock.once('connect', () => {
-        sock.destroy();
-        if (Date.now() > deadline) resolve(false);
-        else setTimeout(tryOnce, 150);
-      });
-      sock.once('error', () => {
-        sock.destroy();
-        resolve(true);
-      });
-    };
-    tryOnce();
-  });
-}
 
 const results = [];
 function check(label, ok, extra = '') {
@@ -120,22 +50,11 @@ async function main() {
   let b;
   try {
     // ── 进程 A：登录，并在 A 上确认 cookie 有效 ──
-    a = startServer(PORT_A);
+    a = startServer({ port: PORT_A, dbPath, backupDir });
     await waitForPort(PORT_A);
 
-    const login = await fetch(`http://127.0.0.1:${PORT_A}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: 'admin', remember: true }),
-      redirect: 'manual',
-    });
-    check('步骤 1：进程 A 登录 200', login.status === 200, `status=${login.status}`);
-
-    // 显式把 cookie 塞进请求头，不用会话容器（PowerShell 的 WebSession 会按端口隔离）
-    const cookie = (login.headers.getSetCookie?.() ?? [])
-      .map((c) => c.split(';')[0])
-      .join('; ');
-    check('拿到 auth_token cookie', cookie.startsWith('auth_token='), `len=${cookie.length}`);
+    const cookie = await login(`http://127.0.0.1:${PORT_A}`);
+    check('步骤 1：进程 A 登录 200 并拿到 auth_token', cookie.startsWith('auth_token='), `len=${cookie.length}`);
 
     const onA = await fetch(`http://127.0.0.1:${PORT_A}/settings`, {
       headers: { Cookie: cookie },
@@ -148,7 +67,7 @@ async function main() {
     const freed = await waitForPortFree(PORT_A);
     check('A 已退出、端口释放', freed);
 
-    b = startServer(PORT_B);
+    b = startServer({ port: PORT_B, dbPath, backupDir });
     await waitForPort(PORT_B);
 
     // 步骤 3：B 上的第一个 HTTP 请求就是带有效 cookie 的受保护页面

@@ -58,8 +58,13 @@ jobs:
       - name: 构建
         run: npm run build
 
-      # A5 冷启动回归：依赖 .next/standalone/server.js，必须在 build 之后，所以不能并进
-      # `npm test`。脚本自己起两个真进程、用临时数据目录和 16801/16802 端口，
-      # 不需要额外环境变量。
+      # 构建后的真实进程校验：都依赖 .next/standalone/server.js，必须在 build 之后，
+      # 所以不能并进 `npm test`。两个脚本各自起真进程、用临时数据目录和固定端口
+      # （冷启动 16801/16802、备份 16811/16812），不需要额外环境变量。
       - name: 冷启动回归（A5）
         run: node scripts/test-cold-start.mjs
+
+      # 备份这条路走的是 HTTP 路由：数据层单测能钉住 backupDatabase() 内部的 await，
+      # 但钉不住「route 自己忘了 await 助手」。只有真打一次 HTTP 才能发现。
+      - name: 备份往返回归（返回时文件必须已完整）
+        run: node scripts/test-backup-http.mjs
