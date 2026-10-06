@@ -18,13 +18,10 @@ export async function GET() {
 
 export async function PUT(request: NextRequest) {
   try {
-    const parsed = await readJson(request);
+    // 非对象 / null / 数组已在 readJson 里统一挡成 400，这里不用再判一遍
+    const parsed = await readJson<Record<string, unknown>>(request);
     if (!parsed.ok) return parsed.response;
     const body = parsed.body;
-
-    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-      return NextResponse.json({ error: '请求格式不正确' }, { status: 400 });
-    }
 
     const entries = Object.entries(body);
 
