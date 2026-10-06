@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteReading, findNextReading, findPreviousReading, getReadingById, updateReading } from '@/lib/db';
+import { readJson } from '@/lib/read-json';
 
 export async function GET(
   request: NextRequest,
@@ -26,8 +27,14 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-    const body = await request.json();
-    const { reading_value, reading_date, reading_time, notes } = body;
+    const parsed = await readJson<{
+      reading_value?: number;
+      reading_date?: string;
+      reading_time?: string | null;
+      notes?: string | null;
+    }>(request);
+    if (!parsed.ok) return parsed.response;
+    const { reading_value, reading_date, reading_time, notes } = parsed.body;
 
     const oldReading = getReadingById(id);
     if (!oldReading) {

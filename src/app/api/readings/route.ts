@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createReading, findNextReading, findPreviousReading, getReadings } from '@/lib/db';
+import { readJson } from '@/lib/read-json';
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,8 +19,16 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { reading_value, reading_date, reading_time = null, notes, source = 'manual', created_by = 'user' } = body;
+    const parsed = await readJson<{
+      reading_value?: number;
+      reading_date?: string;
+      reading_time?: string | null;
+      notes?: string | null;
+      source?: 'manual' | 'mcp' | 'import';
+      created_by?: string;
+    }>(request);
+    if (!parsed.ok) return parsed.response;
+    const { reading_value, reading_date, reading_time = null, notes, source = 'manual', created_by = 'user' } = parsed.body;
 
     // 输入验证
     if (typeof reading_value !== 'number' || !isFinite(reading_value) || reading_value < 0) {

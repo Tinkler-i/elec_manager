@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { initializeAuth, verifyPassword, generateToken } from '@/lib/auth';
+import { readJson } from '@/lib/read-json';
 
 // 简单的内存速率限制（按 IP）
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
@@ -58,8 +59,11 @@ export async function POST(request: NextRequest) {
 
     initializeAuth();
 
-    const body = await request.json();
-    const { password, remember } = body;
+    // 用 readJson 而不是裸 request.json()：解析失败时 V8 的 SyntaxError 会引用输入片段，
+    // 记进日志就等于把密码写进日志（见 src/lib/read-json.ts）
+    const parsed = await readJson<{ password?: unknown; remember?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const { password, remember } = parsed.body;
 
     if (!password) {
       return NextResponse.json({ error: '请输入密码' }, { status: 400 });
