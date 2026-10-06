@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
 
     return response;
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('登录失败:', error);
     return NextResponse.json({ error: '登录失败' }, { status: 500 });
   }
 }
