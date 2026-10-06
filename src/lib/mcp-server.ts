@@ -1,6 +1,17 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { BACKUP_DIR, getDb, generateId, getRatePerKwh } from './db';
+import {
+  BACKUP_DIR,
+  createReading,
+  deleteReading,
+  findNextReading,
+  findPreviousReading,
+  getDb,
+  getReadingById,
+  getReadings,
+  getStats,
+  updateReading,
+} from './db';
 import { toPublicSettings } from './settings-keys';
 import fs from 'fs';
 import path from 'path';
@@ -44,17 +55,12 @@ export function createMcpServer(): McpServer {
     },
   }, async (args) => {
     try {
-      const db = getDb();
       const { reading_value, reading_date, reading_time, notes } = args;
       const time = reading_time || null;
 
-      const prevReading = db.prepare(
-        `SELECT reading_value FROM readings WHERE reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, '')) ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
-      ).get(reading_date, reading_date, time ?? '') as { reading_value: number } | undefined;
-
-      const nextReading = db.prepare(
-        `SELECT reading_value FROM readings WHERE reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, '')) ORDER BY reading_date ASC, reading_time ASC LIMIT 1`
-      ).get(reading_date, reading_date, time ?? '') as { reading_value: number } | undefined;
+      // 同一天的多笔按 reading_time 排先后，口径见 db.ts 的 findAdjacentReading
+      const prevReading = findPreviousReading(reading_date, time);
+      const nextReading = findNextReading(reading_date, time);
 
       if (prevReading && reading_value < prevReading.reading_value) {
         return errorResult(`读数不能小于前一次读数 (${prevReading.reading_value})`);
@@ -63,19 +69,14 @@ export function createMcpServer(): McpServer {
         return errorResult(`读数不能大于后一次读数 (${nextReading.reading_value})`);
       }
 
-      let previous_reading: number | null = prevReading?.reading_value ?? null;
-      if (!prevReading) {
-        const initialSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('initial_reading') as { value: string } | undefined;
-        previous_reading = initialSetting ? parseFloat(initialSetting.value) : null;
-      }
-
-      const id = generateId();
-      db.prepare(`
-        INSERT INTO readings (id, reading_value, reading_date, reading_time, previous_reading, notes, source, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, 'mcp', 'ai')
-      `).run(id, reading_value, reading_date, time, previous_reading, notes || null);
-
-      const newReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id);
+      const newReading = createReading({
+        reading_value,
+        reading_date,
+        reading_time: time,
+        notes,
+        source: 'mcp',
+        created_by: 'ai',
+      });
       return jsonResult(newReading);
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '添加读数失败');
@@ -93,26 +94,11 @@ export function createMcpServer(): McpServer {
     },
   }, async (args) => {
     try {
-      const db = getDb();
-      let query = 'SELECT * FROM readings WHERE 1=1';
-      const params: unknown[] = [];
-
-      if (args.start_date) {
-        query += ' AND reading_date >= ?';
-        params.push(args.start_date);
-      }
-      if (args.end_date) {
-        query += ' AND reading_date <= ?';
-        params.push(args.end_date);
-      }
-      query += ' ORDER BY reading_date DESC, reading_time DESC';
-      if (args.limit) {
-        query += ' LIMIT ?';
-        params.push(args.limit);
-      }
-
-      const rows = db.prepare(query).all(...params);
-      return jsonResult(rows);
+      return jsonResult(getReadings({
+        start: args.start_date,
+        end: args.end_date,
+        limit: args.limit,
+      }));
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '查询读数失败');
     }
@@ -125,24 +111,7 @@ export function createMcpServer(): McpServer {
     inputSchema: {},
   }, async () => {
     try {
-      const db = getDb();
-      const totalReadings = (db.prepare('SELECT COUNT(*) as count FROM readings').get() as { count: number }).count;
-      const totalConsumed = (db.prepare('SELECT COALESCE(SUM(units_consumed), 0) as total FROM readings').get() as { total: number }).total;
-
-      const now = new Date();
-      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      const currentMonthConsumed = (db.prepare(
-        `SELECT COALESCE(SUM(units_consumed), 0) as total FROM readings WHERE reading_date LIKE ? || '%'`
-      ).get(currentMonth) as { total: number }).total;
-
-      const ratePerKwh = getRatePerKwh();
-      return jsonResult({
-        totalReadings,
-        totalConsumed,
-        totalAmount: totalConsumed * ratePerKwh,
-        currentMonthConsumed,
-        currentMonthAmount: currentMonthConsumed * ratePerKwh,
-      });
+      return jsonResult(getStats());
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '获取统计失败');
     }
@@ -155,11 +124,10 @@ export function createMcpServer(): McpServer {
     inputSchema: {
       type: z.literal('readings').describe('导出类型，目前仅支持 "readings"'),
     },
-  }, async (args) => {
+  }, async () => {
     try {
-      const db = getDb();
-      const data = db.prepare('SELECT * FROM readings ORDER BY reading_date DESC, reading_time DESC').all();
-      return jsonResult({ count: (data as unknown[]).length, data });
+      const data = getReadings();
+      return jsonResult({ count: data.length, data });
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '导出数据失败');
     }
@@ -197,8 +165,7 @@ export function createMcpServer(): McpServer {
     },
   }, async (args) => {
     try {
-      const db = getDb();
-      const reading = db.prepare('SELECT * FROM readings WHERE id = ?').get(args.id);
+      const reading = getReadingById(args.id);
       if (!reading) {
         return errorResult('读数不存在');
       }
@@ -221,12 +188,9 @@ export function createMcpServer(): McpServer {
     },
   }, async (args) => {
     try {
-      const db = getDb();
       const { id, reading_value, reading_date, reading_time, notes } = args;
 
-      const oldReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id) as {
-        id: string; reading_value: number; reading_date: string; reading_time: string | null; previous_reading: number | null;
-      } | undefined;
+      const oldReading = getReadingById(id);
       if (!oldReading) {
         return errorResult('读数不存在');
       }
@@ -243,13 +207,9 @@ export function createMcpServer(): McpServer {
         return errorResult('日期格式不正确，应为 YYYY-MM-DD');
       }
 
-      const prevReading = db.prepare(
-        `SELECT reading_value FROM readings WHERE (reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, ''))) AND id != ? ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
-      ).get(newDate, newDate, newTime ?? '', id) as { reading_value: number } | undefined;
-
-      const nextReading = db.prepare(
-        `SELECT reading_value FROM readings WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, ''))) AND id != ? ORDER BY reading_date ASC, reading_time ASC LIMIT 1`
-      ).get(newDate, newDate, newTime ?? '', id) as { reading_value: number } | undefined;
+      // 排除自己：否则「后一条」会查到自身
+      const prevReading = findPreviousReading(newDate, newTime, id);
+      const nextReading = findNextReading(newDate, newTime, id);
 
       if (prevReading && newValue < prevReading.reading_value) {
         return errorResult(`读数不能小于前一次读数 (${prevReading.reading_value})`);
@@ -258,22 +218,12 @@ export function createMcpServer(): McpServer {
         return errorResult(`读数不能大于后一次读数 (${nextReading.reading_value})`);
       }
 
-      const transaction = db.transaction(() => {
-        db.prepare(
-          'UPDATE readings SET reading_value = ?, reading_date = ?, reading_time = ?, notes = ? WHERE id = ?'
-        ).run(newValue, newDate, newTime, newNotes, id);
-
-        const nextForCascade = db.prepare(
-          `SELECT id, previous_reading FROM readings WHERE reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, '')) ORDER BY reading_date ASC, reading_time ASC LIMIT 1`
-        ).get(oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '') as { id: string; previous_reading: number } | undefined;
-        if (nextForCascade && nextForCascade.previous_reading === oldReading.reading_value) {
-          db.prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(newValue, nextForCascade.id);
-        }
+      const updatedReading = updateReading(id, {
+        reading_value: newValue,
+        reading_date: newDate,
+        reading_time: newTime,
+        notes: newNotes,
       });
-
-      transaction();
-
-      const updatedReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id);
       return jsonResult(updatedReading);
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '编辑读数失败');
@@ -289,30 +239,11 @@ export function createMcpServer(): McpServer {
     },
   }, async (args) => {
     try {
-      const db = getDb();
       const { id } = args;
 
-      const oldReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id) as {
-        id: string; reading_value: number; reading_date: string; reading_time: string | null;
-      } | undefined;
-      if (!oldReading) {
+      if (!deleteReading(id)) {
         return errorResult('读数不存在');
       }
-
-      const prevReading = db.prepare(
-        `SELECT reading_value FROM readings WHERE reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, '')) ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
-      ).get(oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '') as { reading_value: number } | undefined;
-
-      const newPreviousReading = prevReading?.reading_value ?? null;
-
-      const transaction = db.transaction(() => {
-        db.prepare('DELETE FROM readings WHERE id = ?').run(id);
-        db.prepare(
-          `UPDATE readings SET previous_reading = ? WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, ''))) AND previous_reading = ?`
-        ).run(newPreviousReading, oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '', oldReading.reading_value);
-      });
-
-      transaction();
 
       return jsonResult({ message: '读数已删除', id });
     } catch (e) {

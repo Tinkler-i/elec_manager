@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@/lib/db';
-import { Reading } from '@/types';
+import { deleteReading, findNextReading, findPreviousReading, getReadingById, updateReading } from '@/lib/db';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const db = getDb();
     const { id } = await params;
-    const reading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id) as Reading | undefined;
+    const reading = getReadingById(id);
 
     if (!reading) {
       return NextResponse.json({ error: '读数不存在' }, { status: 404 });
@@ -21,27 +19,16 @@ export async function GET(
   }
 }
 
-function updateNextReadingPrevious(db: ReturnType<typeof getDb>, currentReading: Reading, newValue: number) {
-  const nextReading = db.prepare(
-      'SELECT id, previous_reading FROM readings WHERE reading_date > ? OR (reading_date = ? AND reading_time > ?) ORDER BY reading_date ASC, reading_time ASC LIMIT 1'
-    ).get(currentReading.reading_date, currentReading.reading_date, currentReading.reading_time ?? '') as { id: string; previous_reading: number } | undefined;
-
-  if (nextReading && nextReading.previous_reading === currentReading.reading_value) {
-    db.prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(newValue, nextReading.id);
-  }
-}
-
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const db = getDb();
     const { id } = await params;
     const body = await request.json();
     const { reading_value, reading_date, reading_time, notes } = body;
 
-    const oldReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id) as Reading | undefined;
+    const oldReading = getReadingById(id);
     if (!oldReading) {
       return NextResponse.json({ error: '读数不存在' }, { status: 404 });
     }
@@ -61,13 +48,9 @@ export async function PUT(
 
     const newTime = reading_time !== undefined ? (reading_time || null) : oldReading.reading_time;
 
-    const prevReading = db.prepare(
-      `SELECT reading_value FROM readings WHERE (reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, ''))) AND id != ? ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
-    ).get(reading_date, reading_date, newTime, id) as { reading_value: number } | undefined;
-
-    const nextReading = db.prepare(
-      `SELECT reading_value FROM readings WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, ''))) AND id != ? ORDER BY reading_date ASC, reading_time ASC LIMIT 1`
-    ).get(reading_date, reading_date, newTime, id) as { reading_value: number } | undefined;
+    // 排除自己：否则「后一条」会查到自身
+    const prevReading = findPreviousReading(reading_date, newTime, id);
+    const nextReading = findNextReading(reading_date, newTime, id);
 
     if (prevReading && reading_value < prevReading.reading_value) {
       return NextResponse.json(
@@ -83,19 +66,12 @@ export async function PUT(
       );
     }
 
-    const transaction = db.transaction(() => {
-      db.prepare(`
-        UPDATE readings
-        SET reading_value = ?, reading_date = ?, reading_time = ?, notes = ?
-        WHERE id = ?
-      `).run(reading_value, reading_date, newTime, notes, id);
-
-      updateNextReadingPrevious(db, oldReading, reading_value);
+    const updatedReading = updateReading(id, {
+      reading_value,
+      reading_date,
+      reading_time: newTime,
+      notes: notes ?? null,
     });
-
-    transaction();
-
-    const updatedReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id);
 
     return NextResponse.json(updatedReading);
   } catch (error) {
@@ -108,31 +84,11 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const db = getDb();
     const { id } = await params;
 
-    const oldReading = db.prepare('SELECT * FROM readings WHERE id = ?').get(id) as Reading | undefined;
-    if (!oldReading) {
+    if (!deleteReading(id)) {
       return NextResponse.json({ error: '读数不存在' }, { status: 404 });
     }
-
-    const prevReading = db.prepare(
-      `SELECT reading_value FROM readings WHERE (reading_date < ? OR (reading_date = ? AND COALESCE(reading_time, '') < COALESCE(?, ''))) ORDER BY reading_date DESC, reading_time DESC LIMIT 1`
-    ).get(oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '') as { reading_value: number } | undefined;
-
-    const newPreviousReading = prevReading?.reading_value ?? null;
-
-    const transaction = db.transaction(() => {
-      db.prepare('DELETE FROM readings WHERE id = ?').run(id);
-
-      db.prepare(`
-        UPDATE readings SET previous_reading = ?
-        WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, '')))
-        AND previous_reading = ?
-      `).run(newPreviousReading, oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '', oldReading.reading_value);
-    });
-
-    transaction();
 
     return NextResponse.json({ message: '读数已删除' });
   } catch (error) {
