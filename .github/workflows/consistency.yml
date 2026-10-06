@@ -85,6 +85,9 @@ jobs:
           export LC_ALL=C
           if grep -qE '^src/' /tmp/changed.txt && grep -qE '^(\.github/workflows/|fnos/build\.sh)' /tmp/changed.txt; then
             echo "wide=1" >> "$GITHUB_OUTPUT"
+            # 先发一条 warning 标注。这一步不需要任何额外权限，
+            # 即使下面的 PR 留言因为 token 只有读权限而失败，信息也不会丢。
+            echo "::warning::这个 PR 同时改了 src/** 和构建/打包配置，改动范围偏宽，建议拆分或说明原因。"
           else
             echo "wide=0" >> "$GITHUB_OUTPUT"
           fi
