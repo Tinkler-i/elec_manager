@@ -1,5 +1,29 @@
 // Test script for all calculation logic across the system
-// Run: npx tsx scripts/test-calculations.ts
+// Run: npm test
+
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/**
+ * 图表算法直接跑生产实现（`src/lib/chart-data.ts`），不在本文件里复制一份。
+ *
+ * 复制版的毛病是：把 `chart-data.ts` 改坏，这些用例不会红 —— 测试拦不住就等于没测。
+ *
+ * 为什么用动态 import 而不是静态 import：Node 的 ESM 要求说明符带扩展名，
+ * 而 TS 在没开 `allowImportingTsExtensions` 时不允许 import 路径以 `.ts` 结尾。
+ * 动态 import 的说明符是运行时字符串，两边限制都绕开了。
+ */
+const here = dirname(fileURLToPath(import.meta.url));
+// 说明符是运行时字符串，TS 推不出类型，所以用类型位置的 import() 标注一下 ——
+// 它在类型位置，编译后不存在，不影响运行时。
+const chartData: typeof import('../src/lib/chart-data') = await import(
+  `${pathToFileURL(join(here, '..', 'src', 'lib', 'chart-data.ts')).href}`
+);
+const { dailyUsage, lastReadingOfDay, monthlyConsumption, monthlyDailyAverage, annualSeries, annualChartRows } =
+  chartData;
+
+/** 图表用例不校验电费，单价取默认值即可 */
+const RATE = 0.56;
 
 interface Reading {
   id: string;
@@ -56,110 +80,25 @@ function makeReading(date: string, value: number, prevReading: number | null, ti
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// daily-usage-chart.tsx logic
+// 图表算法：不再复制实现
+//
+// 原来这里有 calcDailyChartData / lastReadingOfDay / interpolateAtDate /
+// calcUsageChartData 四份副本，对应 src/lib/chart-data.ts 里的
+// dailyUsage / lastReadingOfDay / monthlyDailyAverage。现在直接用真代码，
+// 副本已删除 —— 改坏 chart-data.ts，下面的用例必须变红。
 // ═══════════════════════════════════════════════════════════════════
-function calcDailyChartData(readings: Reading[]) {
-  const dayGroups: Record<string, Reading[]> = {};
-  readings.forEach(r => {
-    const date = r.reading_date;
-    if (!dayGroups[date]) dayGroups[date] = [];
-    dayGroups[date].push(r);
-  });
-  const sortedDates = Object.keys(dayGroups).sort();
 
-  const dailyData: { date: string; dailyAvg: number; totalConsumed: number; days: number }[] = [];
-  for (let i = 0; i < sortedDates.length; i++) {
-    const date = sortedDates[i];
-    const dayReadings = dayGroups[date].sort((a, b) => (a.reading_time ?? '').localeCompare(b.reading_time ?? ''));
-    const firstOfDay = dayReadings[0];
-    const lastOfDay = dayReadings[dayReadings.length - 1];
-
-    if (i === 0) {
-      const consumed = lastOfDay.units_consumed || 0;
-      dailyData.push({ date, dailyAvg: 0, totalConsumed: consumed, days: 0 });
-    } else {
-      const prevDate = new Date(sortedDates[i - 1]);
-      const curDate = new Date(date);
-      const daysDiff = Math.max(1, Math.round((curDate.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24)));
-      const consumed = lastOfDay.reading_value - (firstOfDay.previous_reading ?? 0);
-      dailyData.push({ date, dailyAvg: consumed / daysDiff, totalConsumed: consumed, days: daysDiff });
-    }
-  }
-  return dailyData;
-}
 
 // ═══════════════════════════════════════════════════════════════════
-// usage-chart.tsx logic
-// ═══════════════════════════════════════════════════════════════════
-function lastReadingOfDay(readings: Reading[]): Record<string, Reading> {
-  return readings.reduce((acc, r) => {
-    const date = r.reading_date;
-    if (!acc[date] || (r.reading_time ?? '') > (acc[date].reading_time ?? '')) {
-      acc[date] = r;
-    }
-    return acc;
-  }, {} as Record<string, Reading>);
-}
-
-function interpolateAtDate(sortedEntries: { date: string; reading: Reading }[], targetDate: string): number | null {
-  if (sortedEntries.length === 0) return null;
-  if (targetDate < sortedEntries[0].date) return null;
-  if (targetDate >= sortedEntries[sortedEntries.length - 1].date) return sortedEntries[sortedEntries.length - 1].reading.reading_value;
-
-  for (let i = 0; i < sortedEntries.length - 1; i++) {
-    const a = sortedEntries[i];
-    const b = sortedEntries[i + 1];
-    if (targetDate >= a.date && targetDate <= b.date) {
-      if (a.date === b.date) return a.reading.reading_value;
-      const tA = new Date(a.date).getTime();
-      const tB = new Date(b.date).getTime();
-      const tTarget = new Date(targetDate).getTime();
-      const ratio = (tTarget - tA) / (tB - tA);
-      return a.reading.reading_value + (b.reading.reading_value - a.reading.reading_value) * ratio;
-    }
-  }
-  return null;
-}
-
-function calcUsageChartData(readings: Reading[]) {
-  const lastDay = lastReadingOfDay(readings);
-  const sortedEntries = Object.entries(lastDay)
-    .map(([date, reading]) => ({ date, reading }))
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  const allMonths = new Set<string>();
-  sortedEntries.forEach(e => allMonths.add(e.date.substring(0, 7)));
-  const sortedMonths = Array.from(allMonths).sort();
-
-  const monthlyData: Record<string, { dailyAvg: number; totalConsumed: number; days: number }> = {};
-  for (const month of sortedMonths) {
-    const [y, m] = month.split('-').map(Number);
-    const firstDay = `${month}-01`;
-
-    const monthReadings = sortedEntries.filter(e => e.date.substring(0, 7) === month);
-    const firstReading = monthReadings[0];
-    const lastReading = monthReadings[monthReadings.length - 1];
-    if (!firstReading || !lastReading) continue;
-
-    let startValue = interpolateAtDate(sortedEntries, firstDay);
-    if (startValue === null) {
-      startValue = firstReading.reading.previous_reading ?? firstReading.reading.reading_value;
-    }
-
-    const endValue = lastReading.reading.reading_value;
-    const endDate = lastReading.date;
-    const daysCovered = Math.max(1, Math.round(
-      (new Date(endDate).getTime() - new Date(firstDay).getTime()) / (1000 * 60 * 60 * 24)
-    ) + 1);
-
-    const consumed = Math.max(0, endValue - startValue);
-    monthlyData[month] = { dailyAvg: consumed / daysCovered, totalConsumed: consumed, days: daysCovered };
-  }
-  return monthlyData;
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// stats/route.ts logic
+// 统计：保留一份副本，但它只当「期望值 oracle」
+//
+// 生产实现是 src/lib/db.ts 的 getStats()，要开 SQLite，而且 currentMonth 取自
+// 真实当月 —— 没法当纯函数 import 进来（TEST 4 / TEST 7 断言的是 2026-06，
+// 直接跑 getStats() 必挂）。
+//
+// 所以这里留一份 oracle，同时在文件末尾加了一条交叉校验：用临时 SQLite 造同一份
+// 数据跑真实的 getStats()，断言两者结果一致。这样副本被钉在生产实现上 ——
+// db.getStats() 改坏，交叉校验就红。
 // ═══════════════════════════════════════════════════════════════════
 function calcStats(readings: Reading[], currentMonth: string) {
   const lastReadingOfMonth: Record<string, Reading> = {};
@@ -199,38 +138,12 @@ function calcStats(readings: Reading[], currentMonth: string) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// monthly-comparison logic
+// 月度对比：不再复制实现
+//
+// 原来的 calcMonthlyComparison 副本对应 src/lib/chart-data.ts 的
+// monthlyConsumption，已删除，直接用真代码。
 // ═══════════════════════════════════════════════════════════════════
-function calcMonthlyComparison(readings: Reading[]) {
-  const lastReadingOfMonth: Record<string, Reading> = {};
-  const firstReadingOfMonth: Record<string, Reading> = {};
-  readings.forEach(r => {
-    const month = r.reading_date.substring(0, 7);
-    if (!lastReadingOfMonth[month] || r.reading_date > lastReadingOfMonth[month].reading_date) {
-      lastReadingOfMonth[month] = r;
-    }
-    if (!firstReadingOfMonth[month] || r.reading_date < firstReadingOfMonth[month].reading_date) {
-      firstReadingOfMonth[month] = r;
-    }
-  });
 
-  const sortedMonths = Object.keys(lastReadingOfMonth).sort();
-  const monthlyData: Record<string, number> = {};
-  sortedMonths.forEach((month, index) => {
-    const currentReading = lastReadingOfMonth[month];
-    const prevReading = index > 0 ? lastReadingOfMonth[sortedMonths[index - 1]] : null;
-    let consumed: number;
-    if (prevReading) {
-      consumed = currentReading.reading_value - prevReading.reading_value;
-    } else {
-      const firstReading = firstReadingOfMonth[month];
-      const baseline = firstReading?.previous_reading ?? 0;
-      consumed = currentReading.reading_value - baseline;
-    }
-    monthlyData[month] = Math.max(0, consumed);
-  });
-  return monthlyData;
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // TEST 1: Normal case
@@ -245,20 +158,25 @@ console.log('\n═══ TEST 1: 正常情况（每天记录，无间隔）═�
     makeReading('2026-06-05', 150, 135),
   ];
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   assert(dailyData.length === 5, '5 days of data');
   assert(dailyData[0].dailyAvg === 0, 'First day dailyAvg = 0');
   assert(dailyData[1].dailyAvg === 10, 'Day 2: 10/1 = 10');
   assert(dailyData[4].dailyAvg === 15, 'Day 5: 15/1 = 15');
 
-  const usageData = calcUsageChartData(readings);
+  // 生产实现按月份返回数组，这里转回「月份 → 该项」的字典，断言语义不变
+  const usageData = Object.fromEntries(
+    monthlyDailyAverage(readings).map(m => [m.month, m] as const),
+  );
   assert(approxEqual(usageData['2026-06'].dailyAvg, 10), 'June daily avg = 10');
 
   // Stats: first reading prev=null → baseline=0, total = 150-0 = 150
   const stats = calcStats(readings, '2026-06');
   assert(stats.totalConsumed === 150, 'Total consumed = 150 (from initial 0)', stats.totalConsumed, 150);
 
-  const monthly = calcMonthlyComparison(readings);
+  const monthly = Object.fromEntries(
+    monthlyConsumption(readings).map(m => [m.month, m.consumed] as const),
+  );
   assert(monthly['2026-06'] === 150, 'Monthly June = 150', monthly['2026-06'], 150);
 }
 
@@ -273,12 +191,15 @@ console.log('\n═══ TEST 2: 中间隔了3天没记═══');
     makeReading('2026-06-06', 150, 140),
   ];
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   assert(dailyData[1].totalConsumed === 40, 'Jun 5 consumed = 40');
   assert(dailyData[1].days === 4, 'Jun 5 days = 4');
   assert(dailyData[1].dailyAvg === 10, 'Jun 5 dailyAvg = 10');
 
-  const usageData = calcUsageChartData(readings);
+  // 生产实现按月份返回数组，这里转回「月份 → 该项」的字典，断言语义不变
+  const usageData = Object.fromEntries(
+    monthlyDailyAverage(readings).map(m => [m.month, m] as const),
+  );
   assert(approxEqual(usageData['2026-06'].dailyAvg, 8.33), 'June daily avg ≈ 8.33');
 }
 
@@ -294,12 +215,14 @@ console.log('\n═══ TEST 3: 同一天记了两次═══');
     makeReading('2026-06-03', 125, 115),
   ];
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   // first=08:00(prev=100), last=20:00(value=115), consumed=115-100=15
   assert(dailyData[1].totalConsumed === 15, 'Jun 2 consumed = 15 (115-100)');
   assert(dailyData[1].dailyAvg === 15, 'Jun 2 dailyAvg = 15');
 
-  const monthly = calcMonthlyComparison(readings);
+  const monthly = Object.fromEntries(
+    monthlyConsumption(readings).map(m => [m.month, m.consumed] as const),
+  );
   // first reading prev=null → baseline=0, consumed = 125-0 = 125
   assert(monthly['2026-06'] === 125, 'Monthly June = 125', monthly['2026-06'], 125);
 }
@@ -317,11 +240,14 @@ console.log('\n═══ TEST 4: 当月没结束═══');
     makeReading('2026-06-13', 1150, 1080),
   ];
 
-  const usageData = calcUsageChartData(readings);
+  // 生产实现按月份返回数组，这里转回「月份 → 该项」的字典，断言语义不变
+  const usageData = Object.fromEntries(
+    monthlyDailyAverage(readings).map(m => [m.month, m] as const),
+  );
   assert(usageData['2026-06'].days === 13, 'June days = 13');
   assert(approxEqual(usageData['2026-06'].dailyAvg, 8.46), 'June daily avg ≈ 8.46');
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   const jun13 = dailyData.find(d => d.date === '2026-06-13');
   assert(jun13!.days === 8, 'Jun 13 days = 8');
   assert(approxEqual(jun13!.dailyAvg, 8.75), 'Jun 13 dailyAvg = 8.75');
@@ -342,15 +268,20 @@ console.log('\n═══ TEST 5: 隔了一个月没记═══');
     makeReading('2026-06-15', 600, 560),
   ];
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   const jun1 = dailyData.find(d => d.date === '2026-06-01');
   assert(jun1!.days === 32, 'Jun 1 days = 32');
   assert(approxEqual(jun1!.dailyAvg, 0.94), 'Jun 1 dailyAvg ≈ 0.94');
 
-  const usageData = calcUsageChartData(readings);
+  // 生产实现按月份返回数组，这里转回「月份 → 该项」的字典，断言语义不变
+  const usageData = Object.fromEntries(
+    monthlyDailyAverage(readings).map(m => [m.month, m] as const),
+  );
   assert(approxEqual(usageData['2026-06'].dailyAvg, 2.67), 'June daily avg ≈ 2.67');
 
-  const monthly = calcMonthlyComparison(readings);
+  const monthly = Object.fromEntries(
+    monthlyConsumption(readings).map(m => [m.month, m.consumed] as const),
+  );
   assert(monthly['2026-06'] === 70, 'Monthly June = 70');
 
   const stats = calcStats(readings, '2026-06');
@@ -367,12 +298,17 @@ console.log('\n═══ TEST 6: 第一条读数═══');
     makeReading('2026-06-02', 110, 100),
   ];
 
+  // 注意：这条断言的是 makeReading 这个夹具函数自己算得对不对（生产里
+  // units_consumed 是 SQLite 的生成列），它不覆盖任何生产代码。保留它只是为了
+  // 不动原有 45 条的语义与数量，别把它当成有效覆盖。
   assert(readings[0].units_consumed === 100, 'First reading consumed = 100');
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   assert(dailyData[0].dailyAvg === 0, 'First day dailyAvg = 0');
 
-  const monthly = calcMonthlyComparison(readings);
+  const monthly = Object.fromEntries(
+    monthlyConsumption(readings).map(m => [m.month, m.consumed] as const),
+  );
   assert(monthly['2026-06'] === 110, 'Monthly June = 110', monthly['2026-06'], 110);
 }
 
@@ -392,10 +328,13 @@ console.log('\n═══ TEST 7: 复杂场景═══');
     makeReading('2026-06-10', 1200, 1132),
   ];
 
-  const lastDay = lastReadingOfDay(readings);
+  // 生产实现返回数组，转回「日期 → 读数」的字典，断言语义不变
+  const lastDay = Object.fromEntries(
+    lastReadingOfDay(readings).map(r => [r.reading_date, r] as const),
+  );
   assert(lastDay['2026-06-01'].reading_value === 1132, 'Jun 1 picks 20:00 value=1132');
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   const may1 = dailyData.find(d => d.date === '2026-05-01');
   assert(may1!.days === 28, 'May 1 days = 28');
   assert(approxEqual(may1!.dailyAvg, 1.25), 'May 1 dailyAvg = 1.25');
@@ -403,7 +342,10 @@ console.log('\n═══ TEST 7: 复杂场景═══');
   const jun1 = dailyData.find(d => d.date === '2026-06-01');
   assert(jun1!.totalConsumed === 12, 'Jun 1 consumed = 12 (1132-1120)');
 
-  const usageData = calcUsageChartData(readings);
+  // 生产实现按月份返回数组，这里转回「月份 → 该项」的字典，断言语义不变
+  const usageData = Object.fromEntries(
+    monthlyDailyAverage(readings).map(m => [m.month, m] as const),
+  );
   // April: start=Apr 1 (1000), end=Apr 3 (1025), days=3, consumed=25, dailyAvg=8.33
   assert(approxEqual(usageData['2026-04'].dailyAvg, 8.33), 'April daily avg = 8.33');
   // May: start=May 1 interpolated (1060), end=May 31 (1120), days=31, consumed=60, dailyAvg=1.94
@@ -411,7 +353,9 @@ console.log('\n═══ TEST 7: 复杂场景═══');
   // June: start=Jun 1 interpolated (1132), end=Jun 10 (1200), days=10, consumed=68, dailyAvg=6.8
   assert(approxEqual(usageData['2026-06'].dailyAvg, 6.8), 'June daily avg = 6.8');
 
-  const monthly = calcMonthlyComparison(readings);
+  const monthly = Object.fromEntries(
+    monthlyConsumption(readings).map(m => [m.month, m.consumed] as const),
+  );
   // April: first.prev=980, last=1025, consumed=45
   assert(monthly['2026-04'] === 45, 'April = 45');
   // May: prev=Apr last(1025), last=1120, consumed=95
@@ -436,7 +380,9 @@ console.log('\n═══ TEST 8: 跨年═══');
     makeReading('2026-01-15', 5200, 5040),
   ];
 
-  const monthly = calcMonthlyComparison(readings);
+  const monthly = Object.fromEntries(
+    monthlyConsumption(readings).map(m => [m.month, m.consumed] as const),
+  );
   assert(monthly['2025-12'] === 50, 'Dec = 50');
   assert(monthly['2026-01'] === 170, 'Jan = 170');
 
@@ -445,7 +391,10 @@ console.log('\n═══ TEST 8: 跨年═══');
 
   // Usage chart: Dec start=null→first.prev=4980, end=Dec 31 (5030), days=31
   // consumed=50, dailyAvg=50/31=1.61
-  const usageData = calcUsageChartData(readings);
+  // 生产实现按月份返回数组，这里转回「月份 → 该项」的字典，断言语义不变
+  const usageData = Object.fromEntries(
+    monthlyDailyAverage(readings).map(m => [m.month, m] as const),
+  );
   assert(approxEqual(usageData['2025-12'].dailyAvg, 1.61), 'Dec daily avg = 1.61');
 }
 
@@ -462,11 +411,42 @@ console.log('\n═══ TEST 9: 同一天多次记录 - 日用电量汇总═�
     makeReading('2026-06-03', 145, 130),
   ];
 
-  const dailyData = calcDailyChartData(readings);
+  const dailyData = dailyUsage(readings, RATE);
   const jun2 = dailyData.find(d => d.date === '2026-06-02');
   // first=08:00(prev=100), last=22:00(value=130), consumed=130-100=30
   assert(jun2!.totalConsumed === 30, 'Jun 2 total = 30 (130-100)');
   assert(jun2!.dailyAvg === 30, 'Jun 2 dailyAvg = 30');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TEST 14: 年度分析（annualSeries / annualChartRows）
+//
+// 原来这两条生产函数一条用例都没有 —— 改坏它们不会有任何测试变红。补上，
+// 让「改坏 chart-data.ts 里任意一个算法都会红」这条成立。
+// ═══════════════════════════════════════════════════════════════════
+console.log('\n═══ TEST 14: 年度分析（annualSeries / annualChartRows）═══');
+{
+  const readings = [
+    makeReading('2025-12-28', 5000, 4980),
+    makeReading('2025-12-31', 5030, 5000),
+    makeReading('2026-01-01', 5040, 5030),
+    makeReading('2026-01-15', 5200, 5040),
+  ];
+
+  const series = annualSeries(readings);
+  assert(
+    series.years.map(y => y.year).join(',') === '2025,2026',
+    '年度: 两年各一条线',
+    series.years.map(y => y.year).join(','),
+    '2025,2026',
+  );
+  assert(series.months.join(',') === '01,12', '年度: 横轴取出现过的月份', series.months.join(','), '01,12');
+
+  const rows = annualChartRows(series);
+  // 没抄表的月份必须是 null，不能是 0 —— 断线和不用电在图上要能区分
+  assert(rows[0]['2025'] === null, '年度: 没抄表的月份是 null（不是 0）', rows[0]['2025'], null);
+  assert(rows[0]['2026'] === 170, '年度: 2026-01 = 170', rows[0]['2026'], 170);
+  assert(rows[1]['2025'] === 50, '年度: 2025-12 = 50', rows[1]['2025'], 50);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -487,7 +467,7 @@ async function runRegressionTests() {
   const { pathToFileURL } = await import('node:url');
 
   const libUrl = (rel: string, bust: string) =>
-    `${pathToFileURL(path.join(__dirname, '..', 'src', 'lib', rel)).href}?${bust}`;
+    `${pathToFileURL(path.join(here, '..', 'src', 'lib', rel)).href}?${bust}`;
 
   // ── A1：敏感设置不外发 ──────────────────────────────────────────
   console.log('\n═══ TEST 10: A1 敏感设置不外发（toPublicSettings）═══');
@@ -598,6 +578,82 @@ async function runRegressionTests() {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch {
         // Windows 上 sqlite 连接未关，临时文件可能删不掉；留在系统临时目录里，不影响测试结论
+      }
+    }
+  }
+
+  // ── 交叉校验：本地 oracle vs 生产 db.getStats() ────────────────────
+  // calcStats 是副本，只当「期望值 oracle」。这一段把它钉在生产实现上：用临时
+  // SQLite 造同一份数据，跑真实的 getStats()，两者必须一致 —— db.getStats() 改坏，
+  // 这里就红，副本不再是脱钩的。
+  //
+  // getStats() 的 currentMonth 取自真实当月，所以数据按「真实当月 + 上个月」构造，
+  // 这样 currentMonthConsumed 非零、可比较。
+  console.log('\n═══ TEST 13: 交叉校验 calcStats oracle vs db.getStats() ═══');
+  {
+    const savedDbPath = process.env.ELEC_DB_PATH;
+    const tmpDir = path.join(os.tmpdir(), 'elec-stats-crosscheck');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      process.env.ELEC_DB_PATH = path.join(tmpDir, 'elec.db');
+      const db = await import(libUrl('db.ts', `stats-${Date.now()}`));
+
+      const now = new Date();
+      const ymd = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const lastMonthDay = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 15));
+      const thisMonthDay = ymd(new Date(now.getFullYear(), now.getMonth(), 15));
+      const currentMonth = thisMonthDay.substring(0, 7);
+
+      // 第一笔的 previous_reading 由 initial_reading 设置推导，先把它对齐到夹具的 980，
+      // 否则写进库的数据和 oracle 用的夹具不是同一份。
+      db.getDb().prepare('UPDATE settings SET value = ? WHERE key = ?').run('980', 'initial_reading');
+      db.invalidateSettingsCache();
+
+      const fixtures = [
+        makeReading(lastMonthDay, 1000, 980),
+        makeReading(thisMonthDay, 1100, 1000),
+      ];
+      for (const f of fixtures) {
+        db.createReading({
+          reading_value: f.reading_value,
+          reading_date: f.reading_date,
+          reading_time: null,
+          notes: null,
+        });
+      }
+
+      const oracle = calcStats(fixtures, currentMonth);
+      const prod = db.getStats();
+      const rate = db.getRatePerKwh();
+      const expected = {
+        totalReadings: fixtures.length,
+        totalConsumed: oracle.totalConsumed,
+        totalAmount: oracle.totalConsumed * rate,
+        currentMonthConsumed: oracle.currentMonthConsumed,
+        currentMonthAmount: oracle.currentMonthConsumed * rate,
+      };
+      const same =
+        prod.totalReadings === expected.totalReadings &&
+        approxEqual(prod.totalConsumed, expected.totalConsumed) &&
+        approxEqual(prod.totalAmount, expected.totalAmount) &&
+        approxEqual(prod.currentMonthConsumed, expected.currentMonthConsumed) &&
+        approxEqual(prod.currentMonthAmount, expected.currentMonthAmount);
+
+      assert(
+        same,
+        '交叉校验: db.getStats() 与 calcStats oracle 逐字段一致',
+        JSON.stringify(prod),
+        JSON.stringify(expected),
+      );
+    } finally {
+      if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
+      else process.env.ELEC_DB_PATH = savedDbPath;
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // Windows 上 sqlite 连接未关，临时文件可能删不掉；不影响测试结论
       }
     }
   }
