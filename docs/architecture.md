@@ -58,15 +58,20 @@
 
 ### 1. 环境变量
 
-`fnos/App.Native.ElecMeter/cmd/main` 设置的变量，和 `src/lib/` 里读的必须同名。
+`cmd/main` 实际只设置两个：`ELEC_DB_PATH` 和 `ELEC_BACKUP_DIR`。其余是应用侧的可选覆盖。
 
-| 变量 | 用途 |
-|---|---|
-| `ELEC_DATA_DIR` | 数据目录 |
-| `ELEC_DB_PATH` | SQLite 文件路径 |
-| `ELEC_BACKUP_DIR` | 备份目录 |
+| 变量 | 谁设置 | 谁读取 | 说明 |
+|---|---|---|---|
+| `ELEC_DB_PATH` | `cmd/main:70` | `src/lib/db.ts:5`、`src/lib/auth.ts:22` | SQLite 文件路径 |
+| `ELEC_BACKUP_DIR` | `cmd/main:71` | `src/lib/db.ts:20` | 备份目录 |
+| `ELEC_DATA_DIR` | **没人设置** | `src/lib/db.ts:17` | 可选覆盖，不设时回退到 `dirname(ELEC_DB_PATH)` |
+| `ELEC_UPDATE_REPO` | **没人设置** | `src/app/api/update/route.ts:20` | 更新检查读的仓库，有默认值 |
+| `JWT_SECRET` | **没人设置** | `src/lib/auth.ts:17`、`src/proxy.ts:36` | 不设时由 `auth.ts` 读或生成 `jwt_secret` 文件 |
+| `GITHUB_TOKEN` | 可选 | `src/app/api/update/route.ts:63` | 提高 GitHub API 配额，匿名只有 60 次/小时 |
 
 飞牛侧把 `ELEC_BACKUP_DIR` 指向 `TRIM_PKGVAR`（升级后保留的目录）。**任何写备份的代码都必须走 `src/lib/db.ts` 导出的 `BACKUP_DIR`，不要自己拼 `process.cwd()`** —— 安装目录在升级时整体替换，写进去的备份会跟着没。
+
+`JWT_SECRET` 这条有个已知陷阱：`proxy.ts` 只读环境变量，而这个变量要等 `auth.ts` 第一次运行（登录接口被调用）才被设置。**冷启动后、`auth.ts` 运行之前，proxy 无法验证任何 token**，会把有效 cookie 误判成失效并跳转登录页。
 
 ### 2. 数据库 schema
 
