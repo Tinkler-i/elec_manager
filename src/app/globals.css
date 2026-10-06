@@ -15,7 +15,34 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
+  /*
+   * 显式系统字体栈。
+   *
+   * 这里原来是 `var(--font-sans)` —— 自己引用自己。CSS 自定义属性的循环引用会
+   * 计算成 guaranteed-invalid，于是 `html { font-family: var(--font-sans) }`
+   * 变成 invalid-at-computed-value-time → `unset` → 落到**浏览器默认字体**。
+   * 注意不是落到 Tailwind preflight 的兜底栈：实测两者渲染不同（本机 30px 下
+   * 同一串文字，浏览器默认宽 802px，preflight 兜底栈宽 809px）。
+   *
+   * 也就是说「正文用哪个字体」一直没人写下来过，取决于浏览器「标准字体」设置，
+   * 换台机器/换个浏览器就变。现在把它写死，行为不再依赖巧合。
+   *
+   * 取值与 Tailwind v4 的兜底栈一致。顺序含义：
+   *   ui-sans-serif / system-ui  → 操作系统 UI 字体（macOS 的 SF、Windows 的
+   *     Segoe UI、Android 的 Roboto、Linux 交给 fontconfig）
+   *   sans-serif                 → 浏览器设置的默认无衬线体
+   *   后面几个 emoji 家族         → 兜住 emoji，别落到黑白符号字体
+   *
+   * 中文字体**故意不显式列**：`system-ui` / `sans-serif` 是通用族，浏览器会按
+   * 客户端系统与语言解析到对应中文字体（Windows 中文 → 微软雅黑，macOS → 苹方，
+   * Android → Noto Sans CJK）。通用族一定命中，写在其后的中文名永远轮不到；
+   * 写在其前则会改变 Windows 上的中文渲染 —— 两种都不该做。
+   *
+   * 代价（实测，非推断）：本机浏览器默认字体 ≠ 这个栈，所以拉丁字母与数字的字形
+   * 会有细微变化，行盒高度也随之微变。中文与等宽字形本身不变。
+   */
+  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);

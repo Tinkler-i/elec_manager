@@ -15,14 +15,12 @@ import { ThemeProvider } from "@/components/theme-provider";
  * 而本地/国内网络和 fnos/build.sh 打包都会偶发撞上 —— 构建不该依赖第三方 CDN 的
  * 可达性。
  *
- * 这两个 woff2 来自官方 geist 包（见同目录 LICENSE.txt，SIL OFL 1.1，可随仓库分发）。
+ * 这里只自托管等宽字体（代码块、读数）。正文字体走系统字体栈，见 globals.css 的
+ * --font-sans —— 中文交给客户端系统按语言解析，比塞一个不含中文字形的西文字体合适。
+ *
+ * woff2 来自官方 geist 包（见同目录 LICENSE.txt，SIL OFL 1.1，可随仓库分发）。
  * 可变字体不需要声明 weight，覆盖 100–900。
  */
-const geistSans = localFont({
-  src: "./fonts/Geist-Variable.woff2",
-  variable: "--font-geist-sans",
-});
-
 const geistMono = localFont({
   src: "./fonts/GeistMono-Variable.woff2",
   variable: "--font-geist-mono",
@@ -43,7 +41,7 @@ export default function RootLayout({
     // 与服务端渲染结果必然不一致，不加这一条 React 会报水合警告。
     <html
       lang="zh-CN"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="flex min-h-full flex-col bg-background text-foreground">
