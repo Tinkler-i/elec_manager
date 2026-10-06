@@ -24,6 +24,8 @@ jobs:
             # （linux-arm64 返回 404；下载后核过 ELF e_machine=0xB7，是 AArch64）
             fnpack_arch: linux-arm
     env:
+      # 只影响 action 自身的运行时，不影响构建用的 Node —— 构建 Node 由下面
+      # setup-node 的 node-version: 22 定死，better-sqlite3 的 ABI 跟着它走。
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout
@@ -63,10 +65,10 @@ jobs:
       # 生成的路由类型。干净检出时这个目录不存在 —— tsc 不会因此报错（实测），但会少查
       # 这一层。先生成出来，类型检查才覆盖到生成的路由类型。
       - name: 生成 Next 类型声明
-        run: npx next typegen
+        run: ./node_modules/.bin/next typegen
 
       - name: 类型检查
-        run: npx tsc --noEmit
+        run: ./node_modules/.bin/tsc --noEmit
 
       - name: Lint
         run: npm run lint

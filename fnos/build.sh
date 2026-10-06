@@ -104,7 +104,9 @@ if [ -d "node_modules/better-sqlite3" ]; then
     cp -r node_modules/better-sqlite3 "${SERVER_DIR}/node_modules/better-sqlite3"
 fi
 
-# 复制 @modelcontextprotocol/sdk（serverExternalPackages，standalone 不包含）
+# 复制 @modelcontextprotocol/sdk（serverExternalPackages）。
+# standalone 里也有一份，但是 Next 按依赖图裁剪过的子集（实测 83 个文件，
+# 项目 node_modules 里是 1155 个）。这里覆盖成完整的项目副本。
 if [ -d "node_modules/@modelcontextprotocol" ]; then
     echo "  复制 @modelcontextprotocol/sdk"
     mkdir -p "${SERVER_DIR}/node_modules/@modelcontextprotocol"
