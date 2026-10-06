@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { Reading, Setting, Stats } from '../types';
@@ -141,6 +142,31 @@ export function deleteSetting(key: string): void {
 /** 全部设置项（含 updated_at）。外发前必须先过 toPublicSettings() */
 export function getAllSettings(): Setting[] {
   return getDb().prepare('SELECT key, value, updated_at FROM settings').all() as Setting[];
+}
+
+// ─── 备份 ───────────────────────────────────────────────────────────────────
+
+/**
+ * 把当前数据库完整备份到 BACKUP_DIR，返回生成的文件名。
+ *
+ * **必须 await**：`better-sqlite3` 的 `db.backup()` 是异步的，真正的页拷贝发生在
+ * `setImmediate` 里（见 node_modules/better-sqlite3/lib/methods/backup.js 的
+ * runBackup）。不 await 就返回，调用方会拿到「成功」，而文件此刻还没建出来 ——
+ * 进程在这几毫秒内挂掉就留下一个空备份，而且失败是静默的。
+ *
+ * 目录也在这里统一建：HTTP 和 MCP 两条路径共用这一份，不会各写一套再分叉。
+ */
+export async function backupDatabase(): Promise<string> {
+  const db = getDb();
+
+  if (!fs.existsSync(BACKUP_DIR)) {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const fileName = `elec-backup-${timestamp}.db`;
+  await db.backup(path.join(BACKUP_DIR, fileName));
+  return fileName;
 }
 
 // ─── 读数：查询 ─────────────────────────────────────────────────────────────

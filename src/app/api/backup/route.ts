@@ -1,25 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { BACKUP_DIR, getDb } from '@/lib/db';
+import { BACKUP_DIR, backupDatabase } from '@/lib/db';
 import fs from 'fs';
 import path from 'path';
 
 export async function POST() {
   try {
-    const db = getDb();
-    const backupDir = BACKUP_DIR;
-
-    if (!fs.existsSync(backupDir)) {
-      fs.mkdirSync(backupDir, { recursive: true });
-    }
-
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const backupPath = path.join(backupDir, `elec-backup-${timestamp}.db`);
-
-    db.backup(backupPath);
+    // 必须 await：db.backup() 是异步的，等它把页拷完再回「成功」。
+    // 这条路径原来漏了 await，接口返回时备份文件还没建出来（甚至备份失败也报成功）。
+    const fileName = await backupDatabase();
 
     return NextResponse.json({
       message: '备份创建成功',
-      fileName: `elec-backup-${timestamp}.db`
+      fileName
     });
   } catch (error) {
     return NextResponse.json({ error: '创建备份失败' }, { status: 500 });

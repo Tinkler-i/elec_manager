@@ -710,6 +710,48 @@ async function runRegressionTests() {
       }
     }
   }
+
+  // ── 备份必须等待完成 ──────────────────────────────────────────────
+  // db.backup() 是异步的，真正的页拷贝跑在 setImmediate 里。不 await 就返回，
+  // 调用方拿到「成功」时文件还没建出来 —— HTTP 的 POST /api/backup 原来就是这么漏的。
+  // 生产实现已收敛到 db.ts 的 backupDatabase()，所以这个不变量能在单测里直接钉住。
+  console.log('\n═══ TEST 16: 备份返回时文件已完整（backupDatabase 必须等待）═══');
+  {
+    const savedDbPath = process.env.ELEC_DB_PATH;
+    const savedBackupDir = process.env.ELEC_BACKUP_DIR;
+    const tmpDir = path.join(os.tmpdir(), 'elec-backup-test');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(path.join(tmpDir, 'data'), { recursive: true });
+    try {
+      process.env.ELEC_DB_PATH = path.join(tmpDir, 'data', 'elec.db');
+      process.env.ELEC_BACKUP_DIR = path.join(tmpDir, 'backups'); // 故意不预建，让实现自己建
+      const db = await import(libUrl('db.ts', `backup-${Date.now()}`));
+
+      db.createReading({ reading_value: 1000, reading_date: '2026-01-01', reading_time: '08:00' });
+
+      const fileName = await db.backupDatabase();
+      const backupPath = path.join(process.env.ELEC_BACKUP_DIR, fileName);
+      const exists = fs.existsSync(backupPath);
+      const size = exists ? fs.statSync(backupPath).size : 0;
+      const journals = fs.existsSync(process.env.ELEC_BACKUP_DIR)
+        ? fs.readdirSync(process.env.ELEC_BACKUP_DIR).filter((f) => f.includes('-journal'))
+        : [];
+
+      assert(exists, '备份: await 返回时文件已存在', exists, true);
+      assert(size > 0, '备份: await 返回时文件非 0 字节（没等完就是 0 或不存在）', size, '>0');
+      assert(journals.length === 0, '备份: 没有 -journal 残留', journals.join(','), '(无)');
+    } finally {
+      if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
+      else process.env.ELEC_DB_PATH = savedDbPath;
+      if (savedBackupDir === undefined) delete process.env.ELEC_BACKUP_DIR;
+      else process.env.ELEC_BACKUP_DIR = savedBackupDir;
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // Windows 上 sqlite 连接未关，临时文件可能删不掉；不影响测试结论
+      }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -1,21 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import {
-  BACKUP_DIR,
+  backupDatabase,
   createReading,
   deleteReading,
   findNextReading,
   findPreviousReading,
   getAllSettings,
-  getDb,
   getReadingById,
   getReadings,
   getStats,
   updateReading,
 } from './db';
 import { toPublicSettings } from './settings-keys';
-import fs from 'fs';
-import path from 'path';
 
 // Re-export for backward compatibility
 export { getToolInfoList } from './mcp-tools';
@@ -141,16 +138,8 @@ export function createMcpServer(): McpServer {
     inputSchema: {},
   }, async () => {
     try {
-      const db = getDb();
-      // 必须用 BACKUP_DIR（飞牛下指向 TRIM_PKGVAR/backups）。standalone 的
-      // process.cwd() 是安装目录，升级整体替换，备份写那里会跟着没。
-      const backupDir = BACKUP_DIR;
-      if (!fs.existsSync(backupDir)) {
-        fs.mkdirSync(backupDir, { recursive: true });
-      }
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileName = `elec-backup-${timestamp}.db`;
-      await db.backup(path.join(backupDir, fileName));
+      // 与 HTTP 的 POST /api/backup 共用同一份实现，避免两条路径再分叉
+      const fileName = await backupDatabase();
       return jsonResult({ message: '备份成功', fileName });
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '备份失败');
