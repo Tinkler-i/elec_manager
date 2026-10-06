@@ -22,14 +22,19 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: '请求格式不正确' }, { status: 400 });
     }
 
-    // 验证所有 key 都在白名单内
+    const entries = Object.entries(body);
+
+    // 先把所有 key 和值校验完，再统一落盘。
+    // 边校验边写的话，中途报 400 会留下半套写入 —— 调用方看到「失败」却已经有副作用。
     for (const key of Object.keys(body)) {
       if (!ALLOWED_KEYS.has(key)) {
         return NextResponse.json({ error: `不允许修改设置项: ${key}` }, { status: 403 });
       }
     }
 
-    for (const [key, value] of Object.entries(body)) {
+    // 值也一并校验完，收集成待写列表；中途任何一项不合格就整体放弃，不留半套写入
+    const updates: Array<[string, string]> = [];
+    for (const [key, value] of entries) {
       // 值必须是字符串
       if (typeof value !== 'string') {
         return NextResponse.json({ error: `设置项 ${key} 的值必须是字符串` }, { status: 400 });
@@ -38,10 +43,16 @@ export async function PUT(request: NextRequest) {
       if (value.length > 256) {
         return NextResponse.json({ error: `设置项 ${key} 的值过长` }, { status: 400 });
       }
+      updates.push([key, value]);
+    }
+
+    // 校验全过才落盘
+    for (const [key, value] of updates) {
       setSetting(key, value);
     }
 
-    // 改了 rate_per_kwh / initial_reading，清掉 db.ts 里的设置缓存
+    // 全部写成功之后再清缓存：setSetting 刻意不自动清（见 db.ts 的注释），
+    // 而 rate_per_kwh / initial_reading 都被 getRatePerKwh / getInitialReading 缓存着。
     invalidateSettingsCache();
 
     // 返回时同样过滤敏感项

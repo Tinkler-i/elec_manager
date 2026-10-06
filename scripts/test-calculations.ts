@@ -657,6 +657,59 @@ async function runRegressionTests() {
       }
     }
   }
+
+  // ── 级联修正不能匹配到自己 ──────────────────────────────────────
+  // updateNextReadingPrevious 找的是「原来紧跟其后的那条」。把一条读数改到比原来
+  // 更晚的位置后，它自己也会落进「后一条」的候选里；少了 excludeId，级联会先查到
+  // 它自己 —— 轻则该改的后一条没被改，重则 previous_reading 被自己的新值覆盖。
+  console.log('\n═══ TEST 15: 级联修正不能匹配到自己（excludeId）═══');
+  {
+    const savedDbPath = process.env.ELEC_DB_PATH;
+    const tmpDir = path.join(os.tmpdir(), 'elec-cascade-test');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      process.env.ELEC_DB_PATH = path.join(tmpDir, 'elec.db');
+      const db = await import(libUrl('db.ts', `cascade-${Date.now()}`));
+
+      // 场景 1：A(01-10, 500) → B(01-20, 1100)。把 A 改到更晚的 01-15、值 900。
+      // A 的新位置在它旧位置之后、B 之前，所以它自己会是「后一条」候选里的第一个。
+      // 正确结果：级联跳过自己、找到 B，把 B.prev 从 500 改成 900（用量 200）。
+      // 自匹配：先查到 A 自己，条件不成立 → 什么都不做，B.prev 仍是 500（用量 600）。
+      const a = db.createReading({ reading_value: 500, reading_date: '2026-01-10', reading_time: '08:00' });
+      const b = db.createReading({ reading_value: 1100, reading_date: '2026-01-20', reading_time: '08:00' });
+      assert(b.previous_reading === 500, '级联场景1 前置: B.previous_reading = 500', b.previous_reading, 500);
+
+      db.updateReading(a.id, { reading_value: 900, reading_date: '2026-01-15', reading_time: '08:00', notes: null });
+      const bAfter = db.getReadingById(b.id);
+      assert(bAfter?.previous_reading === 900, '级联场景1: B.previous_reading 跟着改成 900', bAfter?.previous_reading, 900);
+      assert(bAfter?.units_consumed === 200, '级联场景1: B 用量 = 200（不是 600）', bAfter?.units_consumed, 200);
+
+      // 场景 2：最后一条的 previous_reading 恰好等于它自己的值（表没走字），再把它移到更晚。
+      // 这时「后一条」候选里只剩它自己；不过滤就会把 previous_reading 覆盖成自己的新值。
+      // 正确结果：没有后一条，级联什么都不做 → prev 保持 1100（用量 400）。
+      const c = db.createReading({ reading_value: 1100, reading_date: '2026-02-01', reading_time: '08:00' });
+      assert(
+        c.previous_reading === c.reading_value,
+        '级联场景2 前置: prev === value（构造自匹配条件）',
+        c.previous_reading,
+        c.reading_value,
+      );
+
+      db.updateReading(c.id, { reading_value: 1500, reading_date: '2026-05-01', reading_time: '08:00', notes: null });
+      const cAfter = db.getReadingById(c.id);
+      assert(cAfter?.previous_reading === 1100, '级联场景2: previous_reading 保持 1100（不被自己覆盖）', cAfter?.previous_reading, 1100);
+      assert(cAfter?.units_consumed === 400, '级联场景2: 用量 = 400（不是 0）', cAfter?.units_consumed, 400);
+    } finally {
+      if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
+      else process.env.ELEC_DB_PATH = savedDbPath;
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // Windows 上 sqlite 连接未关，临时文件可能删不掉；不影响测试结论
+      }
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
