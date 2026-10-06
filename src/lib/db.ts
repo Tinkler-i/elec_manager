@@ -159,13 +159,23 @@ export function getAllSettings(): Setting[] {
 export async function backupDatabase(): Promise<string> {
   const db = getDb();
 
-  if (!fs.existsSync(BACKUP_DIR)) {
-    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+  // ⚠️ 下面三处的 /*turbopackIgnore: true*/ 不是装饰，删掉会炸打包。
+  //
+  // BACKUP_DIR 是运行期路径（ELEC_BACKUP_DIR，或 process.cwd() 下的默认目录），打包器
+  // 静态解析不出来。Turbopack 遇到解析不出的动态路径会退化成「glob 整个项目根」，而
+  // db.ts 被几乎所有路由/页面 import —— 于是 .next/standalone 里被塞进 src/ docs/ fnos/
+  // scripts/ 和整个仓库，api/stats 的 .nft.json 非 node_modules 条目从 6 涨到 128。
+  // fnos/build.sh 也跟着不再幂等：第二次打包会把上一轮的 app/server 嵌进新包。
+  //
+  // 这个目录是运行期由 Node 创建/读写的，不该由打包器 trace。加了这个注释，Turbopack
+  // 就跳过对它的静态解析。对照实验与实测数字见 task-24。
+  if (!fs.existsSync(/*turbopackIgnore: true*/ BACKUP_DIR)) {
+    fs.mkdirSync(/*turbopackIgnore: true*/ BACKUP_DIR, { recursive: true });
   }
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const fileName = `elec-backup-${timestamp}.db`;
-  await db.backup(path.join(BACKUP_DIR, fileName));
+  await db.backup(path.join(/*turbopackIgnore: true*/ BACKUP_DIR, fileName));
   return fileName;
 }
 
