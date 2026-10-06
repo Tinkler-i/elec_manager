@@ -53,6 +53,12 @@ rm -rf "${SERVER_DIR}"
 echo "构建 Next.js 项目..."
 npm run build
 
+# 构建后检查：standalone 顶层不该混进仓库里的东西（data/、src/、Dockerfile…）。
+# 它同时挂在 package.json 的 postbuild 上，这里显式再跑一次 —— 本地手工执行时日志里
+# 看得见，postbuild 被误删或改名时也不会静默放行。set -e 会让它失败即中止打包。
+echo "检查 standalone 顶层..."
+node scripts/lib/check-standalone-clean.mjs
+
 # 创建 server 目录
 echo "准备应用文件..."
 mkdir -p "${SERVER_DIR}"
