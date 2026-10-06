@@ -18,7 +18,9 @@ fi
 
 case "${TARGET_ARCH}" in
     amd64) FNOS_PLATFORM=x86; FNPACK_ARCH=linux-amd64 ;;
-    arm64) FNOS_PLATFORM=arm; FNPACK_ARCH=linux-arm64 ;;
+    # 官方文档写的是 linux-arm64，但 1.2.3 实际发布的资源名是 linux-arm
+    # （linux-arm64 返回 404；下载后核过 ELF e_machine=0xB7，是 AArch64）
+    arm64) FNOS_PLATFORM=arm; FNPACK_ARCH=linux-arm ;;
     *) echo "不支持的架构：${TARGET_ARCH}（可用：amd64 / arm64）"; exit 1 ;;
 esac
 

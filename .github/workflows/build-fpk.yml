@@ -10,6 +10,9 @@ jobs:
   build:
     runs-on: ${{ matrix.runner }}
     strategy:
+      # 一个架构挂掉不要连累另一个：上一次 arm64 失败把已经跑完的 amd64 job 也取消了，
+      # 结果连健康的产物都拿不到。
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
@@ -17,7 +20,9 @@ jobs:
             fnpack_arch: linux-amd64
           - arch: arm64
             runner: ubuntu-24.04-arm
-            fnpack_arch: linux-arm64
+            # 官方文档写的是 linux-arm64，但 1.2.3 实际发布的资源名是 linux-arm
+            # （linux-arm64 返回 404；下载后核过 ELF e_machine=0xB7，是 AArch64）
+            fnpack_arch: linux-arm
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
