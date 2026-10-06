@@ -39,7 +39,11 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install
+        # npm ci 会校验 package-lock.json 与 package.json 一致。原来写 npm install 是为了
+        # 绕开锁文件里缺的两条 @emnapi（已修），代价是锁文件完全不校验。
+        # 注意锁文件要用 npm 10 维护（Node 22 自带的就是 npm 10）：npm 11 跑 install
+        # 会把 @emnapi/core、@emnapi/runtime 又删掉，CI 的 npm ci 随即 EUSAGE 失败。
+        run: npm ci
 
       - name: 校验 Node ABI 与飞牛 nodejs_v22 一致
         run: |
