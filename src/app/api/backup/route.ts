@@ -14,6 +14,7 @@ export async function POST() {
       fileName
     });
   } catch (error) {
+    console.error('创建备份失败:', error);
     return NextResponse.json({ error: '创建备份失败' }, { status: 500 });
   }
 }
@@ -49,6 +50,7 @@ export async function DELETE(request: NextRequest) {
     fs.unlinkSync(filePath);
     return NextResponse.json({ message: '备份已删除' });
   } catch (error) {
+    console.error('删除备份失败:', error);
     return NextResponse.json({ error: '删除备份失败' }, { status: 500 });
   }
 }
@@ -97,6 +99,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(files);
   } catch (error) {
+    console.error('获取备份列表失败:', error);
     return NextResponse.json({ error: '获取备份列表失败' }, { status: 500 });
   }
 }

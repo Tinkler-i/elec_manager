@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(getReadings({ start, end, limit }));
   } catch (error) {
+    console.error('获取读数失败:', error);
     return NextResponse.json({ error: '获取读数失败' }, { status: 500 });
   }
 }
@@ -73,6 +74,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(newReading, { status: 201 });
   } catch (error) {
+    console.error('创建读数失败:', error);
     return NextResponse.json({ error: '创建读数失败' }, { status: 500 });
   }
 }

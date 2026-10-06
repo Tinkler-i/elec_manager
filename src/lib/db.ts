@@ -4,11 +4,21 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { Reading, Setting, Stats } from '../types';
 
-// 这几处的 /*turbopackIgnore: true*/ 不是装饰。Turbopack 对解析不出的路径会退化成
-// 「按模式匹配」，把仓库里匹配上的文件全 trace 进 .next/standalone —— 实测开发机上只要
-// 存在 fnos/App.Native.ElecMeter/app/server/（上一次打包的产物），它就会被 trace 进去，
-// 于是 fnos/build.sh 第二轮把上一轮的产物嵌进新包。所有路径定义与 fs 调用都要带上这个注释。
-// 详见 backupDatabase() 上面那段说明。
+// 关于 /*turbopackIgnore: true*/：Turbopack 对解析不出的路径会退化成「按模式匹配」，
+// 把仓库里匹配上的文件全 trace 进 .next/standalone（开发机上存在 fnos/*/app/server/
+// 这种上次打包产物时尤其明显，fnos/build.sh 第二轮就把上一轮产物嵌进新包）。
+//
+// · **已验证承重**：backupDatabase() 里那三处 fs 实参（180 / 181 / 186 行）。QA 拆开
+//   实测：拿掉 → 构建 exit 1、NFT 告警 1 条、api/stats 的 .nft.json 非 node_modules
+//   条目 6 → 134、standalone 顶层 4 → 26 项。说明写在 170 行那段。
+// · **尚未隔离验证**：下面三处路径定义上的注释（DB_PATH 15 行 / DATA_DIR 27 行 /
+//   BACKUP_DIR 30 行）。QA 在「干净树 + 没有 ELEC_* 环境变量」这一个条件下拿掉它们，
+//   构建 exit 0、告警 0、nft 与 standalone 与基线逐项相同 —— 没测出差别。**保留**是因为
+//   那个条件不等于全部场景，不是因为它们已被证明必需。别把这条读成「都验过了」；
+//   谁在别的条件下验出结论，请写回这里。
+//
+// export：src/lib/auth.ts 要用它（jwt_secret 文件要放在库同目录）。这里曾经在两处各写
+// 一遍同样的 `ELEC_DB_PATH || cwd/data/elec.db`，改一边忘一边就会让密钥文件落到别的目录去。
 //
 // export：src/lib/auth.ts 要用它（jwt_secret 文件要放在库同目录）。这里曾经在两处各写
 // 一遍同样的 `ELEC_DB_PATH || cwd/data/elec.db`，改一边忘一边就会让密钥文件落到别的目录去。

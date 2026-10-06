@@ -15,6 +15,7 @@ export async function GET(
 
     return NextResponse.json(reading);
   } catch (error) {
+    console.error('获取读数失败:', error);
     return NextResponse.json({ error: '获取读数失败' }, { status: 500 });
   }
 }
@@ -75,6 +76,7 @@ export async function PUT(
 
     return NextResponse.json(updatedReading);
   } catch (error) {
+    console.error('更新读数失败:', error);
     return NextResponse.json({ error: '更新读数失败' }, { status: 500 });
   }
 }
@@ -92,6 +94,7 @@ export async function DELETE(
 
     return NextResponse.json({ message: '读数已删除' });
   } catch (error) {
+    console.error('删除读数失败:', error);
     return NextResponse.json({ error: '删除读数失败' }, { status: 500 });
   }
 }

@@ -14,6 +14,7 @@ export async function POST() {
       initialReading
     });
   } catch (error) {
+    console.error('重算失败:', error);
     return NextResponse.json({ error: '重算失败' }, { status: 500 });
   }
 }
