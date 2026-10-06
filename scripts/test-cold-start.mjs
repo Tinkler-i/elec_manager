@@ -13,7 +13,9 @@
  *   1. 进程 A 登录拿 cookie
  *   2. A 上用该 cookie 请求受保护页面 → 200
  *   3. 全新进程 B（同一数据目录）上，**第一个 HTTP 请求**就是带该 cookie 的受保护页面
- *   4. 期望 200；instrumentation 没跑起来时这里是 307 且 cookie 被清
+ *   4. 期望 200；instrumentation 没跑起来（proxy 拿不到 JWT 密钥）时这里是 **503**
+ *      —— 见 src/proxy.ts 的 secretUnavailableResponse()。task-14 之后「密钥不可用」
+ *      和「token 无效」是两回事：前者 503 且不动 cookie，后者才 307/401。
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -76,7 +78,7 @@ async function main() {
       redirect: 'manual',
     });
     check(
-      '步骤 3：全新进程的第一个请求带有效 cookie → 200（不是 307）',
+      '步骤 3：全新进程的第一个请求带有效 cookie → 200（密钥不可用时是 503）',
       onB.status === 200,
       `status=${onB.status} location=${onB.headers.get('location') ?? ''}`,
     );
