@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import type { Reading, Stats } from '../types';
 
 const DB_PATH = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
 
@@ -102,4 +103,358 @@ export function getInitialReading(): number {
   const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('initial_reading') as { value: string } | undefined;
   cachedInitialReading = setting ? parseFloat(setting.value) : 0;
   return cachedInitialReading;
+}
+
+// ─── 读数：查询 ─────────────────────────────────────────────────────────────
+
+/**
+ * 「前一条 / 后一条」的比较口径：先比日期，同一天再比时间；时间为 NULL 时
+ * 当作空串（排在当天最早）。**必须带 reading_time** —— 只比日期的话，同一天
+ * 录第二笔就找不到当天更早的那笔，previous_reading 会退回初始读数，用量被算大。
+ */
+export interface ReadingQuery {
+  /** 起始日期（含），YYYY-MM-DD */
+  start?: string;
+  /** 结束日期（含），YYYY-MM-DD */
+  end?: string;
+  /** 返回条数上限 */
+  limit?: number;
+}
+
+/** 列表。排序与 /api/readings 的既有实现一致：reading_date DESC, reading_time DESC */
+export function getReadings(opts: ReadingQuery = {}): Reading[] {
+  let sql = 'SELECT * FROM readings WHERE 1=1';
+  const params: unknown[] = [];
+
+  if (opts.start) {
+    sql += ' AND reading_date >= ?';
+    params.push(opts.start);
+  }
+  if (opts.end) {
+    sql += ' AND reading_date <= ?';
+    params.push(opts.end);
+  }
+
+  sql += ' ORDER BY reading_date DESC, reading_time DESC';
+
+  if (opts.limit !== undefined) {
+    sql += ' LIMIT ?';
+    params.push(opts.limit);
+  }
+
+  return getDb().prepare(sql).all(...params) as Reading[];
+}
+
+/**
+ * 全部读数，供 CSV 导出用。
+ *
+ * 排序刻意与 getReadings 不同（只按 reading_date DESC）—— 这是 /api/export
+ * 原有的行序，收敛 SQL 不该顺手改掉导出文件的内容顺序。
+ */
+export function getAllReadings(): Reading[] {
+  return getDb().prepare('SELECT * FROM readings ORDER BY reading_date DESC').all() as Reading[];
+}
+
+export function getReadingById(id: string): Reading | undefined {
+  return getDb().prepare('SELECT * FROM readings WHERE id = ?').get(id) as Reading | undefined;
+}
+
+export function getReadingsByIds(ids: readonly string[]): Reading[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  return getDb().prepare(`SELECT * FROM readings WHERE id IN (${placeholders})`).all(...ids) as Reading[];
+}
+
+function findAdjacentReading(
+  date: string,
+  time: string | null | undefined,
+  excludeId: string | undefined,
+  direction: 'prev' | 'next',
+): Reading | undefined {
+  const cmp = direction === 'prev' ? '<' : '>';
+  const order = direction === 'prev' ? 'DESC' : 'ASC';
+  const params: unknown[] = [date, date, time ?? ''];
+
+  let sql =
+    `SELECT * FROM readings WHERE (reading_date ${cmp} ?` +
+    ` OR (reading_date = ? AND COALESCE(reading_time, '') ${cmp} COALESCE(?, '')))`;
+  if (excludeId) {
+    sql += ' AND id != ?';
+    params.push(excludeId);
+  }
+  sql += ` ORDER BY reading_date ${order}, reading_time ${order} LIMIT 1`;
+
+  return getDb().prepare(sql).get(...params) as Reading | undefined;
+}
+
+/** 严格早于 (date, time) 的最后一条；excludeId 用于「改自己」时把自己排除掉 */
+export function findPreviousReading(
+  date: string,
+  time?: string | null,
+  excludeId?: string,
+): Reading | undefined {
+  return findAdjacentReading(date, time, excludeId, 'prev');
+}
+
+/** 严格晚于 (date, time) 的第一条；excludeId 用于「改自己」时把自己排除掉 */
+export function findNextReading(
+  date: string,
+  time?: string | null,
+  excludeId?: string,
+): Reading | undefined {
+  return findAdjacentReading(date, time, excludeId, 'next');
+}
+
+// ─── 读数：写入 ─────────────────────────────────────────────────────────────
+
+export interface CreateReadingInput {
+  reading_value: number;
+  reading_date: string;
+  reading_time?: string | null;
+  notes?: string | null;
+  source?: Reading['source'];
+  created_by?: string;
+}
+
+export interface UpdateReadingInput {
+  reading_value: number;
+  reading_date: string;
+  reading_time: string | null;
+  notes: string | null;
+}
+
+/**
+ * 插入读数，并自行推导 previous_reading：
+ * 有前一条就用它，没有就用设置里的初始读数。
+ *
+ * 推导放在这里而不是调用方，是为了 HTTP 和 MCP 两条写入路径不可能算出不同的值。
+ * 调用方仍应先调 findPreviousReading / findNextReading 做单调性校验。
+ */
+export function createReading(input: CreateReadingInput): Reading {
+  const time = input.reading_time || null;
+  const prevReading = findPreviousReading(input.reading_date, time);
+  const previous_reading = prevReading ? prevReading.reading_value : getInitialReading();
+
+  const id = generateId();
+  getDb().prepare(`
+    INSERT INTO readings (id, reading_value, reading_date, reading_time, previous_reading, notes, source, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    input.reading_value,
+    input.reading_date,
+    time,
+    previous_reading,
+    input.notes ?? null,
+    input.source ?? 'manual',
+    input.created_by ?? 'user',
+  );
+
+  const created = getReadingById(id);
+  if (!created) throw new Error(`读数插入后读不回来：${id}`);
+  return created;
+}
+
+/** 改完之后，若「原本紧跟其后的那条」的 previous_reading 指向旧值，跟着改掉 */
+function updateNextReadingPrevious(oldReading: Reading, newValue: number): void {
+  const next = getDb().prepare(
+    `SELECT id, previous_reading FROM readings
+     WHERE reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, ''))
+     ORDER BY reading_date ASC, reading_time ASC LIMIT 1`,
+  ).get(oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '') as
+    | { id: string; previous_reading: number | null }
+    | undefined;
+
+  if (next && next.previous_reading === oldReading.reading_value) {
+    getDb().prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(newValue, next.id);
+  }
+}
+
+/** 更新一条读数，并级联修正后一条的 previous_reading。不存在时返回 undefined */
+export function updateReading(id: string, patch: UpdateReadingInput): Reading | undefined {
+  const db = getDb();
+  const oldReading = getReadingById(id);
+  if (!oldReading) return undefined;
+
+  const run = db.transaction(() => {
+    db.prepare(`
+      UPDATE readings SET reading_value = ?, reading_date = ?, reading_time = ?, notes = ?
+      WHERE id = ?
+    `).run(patch.reading_value, patch.reading_date, patch.reading_time, patch.notes ?? null, id);
+
+    updateNextReadingPrevious(oldReading, patch.reading_value);
+  });
+
+  run();
+  return getReadingById(id);
+}
+
+/** 删除后把后一条的 previous_reading 接到被删那条的前一条上 */
+function cascadeDelete(reading: Reading, newPreviousReading: number | null): void {
+  getDb().prepare(`
+    UPDATE readings SET previous_reading = ?
+    WHERE (reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, '')))
+    AND previous_reading = ?
+  `).run(
+    newPreviousReading,
+    reading.reading_date,
+    reading.reading_date,
+    reading.reading_time ?? '',
+    reading.reading_value,
+  );
+}
+
+/** 删除一条读数，并级联修正。不存在时返回 false */
+export function deleteReading(id: string): boolean {
+  const db = getDb();
+  const oldReading = getReadingById(id);
+  if (!oldReading) return false;
+
+  const prevReading = findPreviousReading(oldReading.reading_date, oldReading.reading_time);
+
+  const run = db.transaction(() => {
+    db.prepare('DELETE FROM readings WHERE id = ?').run(id);
+    cascadeDelete(oldReading, prevReading ? prevReading.reading_value : null);
+  });
+
+  run();
+  return true;
+}
+
+/**
+ * 批量删除。按时间升序逐条删，删一条就修正一次后续关系 —— 与单条删除同一套逻辑，
+ * 只是共用一个事务。返回实际删除条数。
+ */
+export function deleteReadings(ids: readonly string[]): number {
+  const db = getDb();
+  const readings = getReadingsByIds(ids);
+  if (readings.length === 0) return 0;
+
+  const sorted = [...readings].sort(
+    (a, b) =>
+      a.reading_date.localeCompare(b.reading_date) ||
+      (a.reading_time ?? '').localeCompare(b.reading_time ?? ''),
+  );
+
+  const run = db.transaction(() => {
+    for (const reading of sorted) {
+      const prevReading = findPreviousReading(reading.reading_date, reading.reading_time);
+      db.prepare('DELETE FROM readings WHERE id = ?').run(reading.id);
+      cascadeDelete(reading, prevReading ? prevReading.reading_value : null);
+    }
+  });
+
+  run();
+  return sorted.length;
+}
+
+/**
+ * 按时间升序重算所有 previous_reading：第一条用初始读数作基准，其余用前一条。
+ * 返回重算条数与所用的初始读数。
+ */
+export function recalculatePreviousReadings(): { count: number; initialReading: number } {
+  const db = getDb();
+  const initialReading = getInitialReading();
+  const allReadings = db.prepare(
+    'SELECT id, reading_value, reading_date, reading_time FROM readings ORDER BY reading_date ASC, reading_time ASC',
+  ).all() as Reading[];
+
+  if (allReadings.length === 0) return { count: 0, initialReading };
+
+  const run = db.transaction(() => {
+    for (let i = 0; i < allReadings.length; i++) {
+      const previous = i === 0 ? initialReading : allReadings[i - 1].reading_value;
+      db.prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(previous, allReadings[i].id);
+    }
+  });
+
+  run();
+  return { count: allReadings.length, initialReading };
+}
+
+// ─── 统计 ───────────────────────────────────────────────────────────────────
+
+/**
+ * 用电统计。
+ *
+ * 算法原样搬自 `/api/stats`（仪表盘一直在用的那份）：按**月末读数**逐月相减，
+ * 第一个月用当月第一条读数的 previous_reading 当基线，每个月的量截到不小于 0。
+ * 比「直接 SUM(units_consumed)」更准的地方有两点：
+ *   · 跨月的那笔读数按自然月边界归属，不会被整笔算进读数所在的月份；
+ *   · 抄表回退 / 改错造成的负差值截成 0，不会把总用电量冲小。
+ * MCP 的 get_stats 以前用的是 SUM 那套，现在两条路径共用这一份。
+ */
+export function getStats(): Stats {
+  const db = getDb();
+
+  const totalReadings = (db.prepare('SELECT COUNT(*) as count FROM readings').get() as { count: number }).count;
+
+  const readings = db.prepare(
+    'SELECT id, reading_value, reading_date, previous_reading FROM readings ORDER BY reading_date ASC',
+  ).all() as Array<{
+    id: string;
+    reading_value: number;
+    reading_date: string;
+    previous_reading: number | null;
+  }>;
+
+  let totalConsumed = 0;
+  let currentMonthConsumed = 0;
+
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  if (readings.length > 0) {
+    // Group readings by month and get the last reading of each month
+    const lastReadingOfMonth: Record<string, typeof readings[0]> = {};
+    readings.forEach(r => {
+      const month = r.reading_date.substring(0, 7);
+      if (!lastReadingOfMonth[month] || r.reading_date > lastReadingOfMonth[month].reading_date) {
+        lastReadingOfMonth[month] = r;
+      }
+    });
+
+    const sortedMonths = Object.keys(lastReadingOfMonth).sort();
+
+    // Get the first reading of each month for baseline calculation
+    const firstReadingOfMonth: Record<string, typeof readings[0]> = {};
+    readings.forEach(r => {
+      const month = r.reading_date.substring(0, 7);
+      if (!firstReadingOfMonth[month] || r.reading_date < firstReadingOfMonth[month].reading_date) {
+        firstReadingOfMonth[month] = r;
+      }
+    });
+
+    // Calculate total and current month consumption based on month boundaries
+    sortedMonths.forEach((month, index) => {
+      const currentReading = lastReadingOfMonth[month];
+      const prevReading = index > 0 ? lastReadingOfMonth[sortedMonths[index - 1]] : null;
+
+      let monthConsumed: number;
+      if (prevReading) {
+        monthConsumed = currentReading.reading_value - prevReading.reading_value;
+      } else {
+        // First month: use the first reading's previous_reading as baseline
+        const firstReading = firstReadingOfMonth[month];
+        const baseline = firstReading?.previous_reading ?? 0;
+        monthConsumed = currentReading.reading_value - baseline;
+      }
+
+      totalConsumed += Math.max(0, monthConsumed);
+
+      if (month === currentMonth) {
+        currentMonthConsumed = Math.max(0, monthConsumed);
+      }
+    });
+  }
+
+  const rate = getRatePerKwh();
+
+  return {
+    totalReadings,
+    totalConsumed,
+    totalAmount: totalConsumed * rate,
+    currentMonthConsumed,
+    currentMonthAmount: currentMonthConsumed * rate,
+  };
 }
