@@ -1,19 +1,31 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { NavigationDock } from "@/components/navigation-dock";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/components/auth-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 
-const geistSans = Geist({
+/**
+ * 字体自托管，不用 next/font/google。
+ *
+ * next/font/google 在**构建期**要去 fonts.googleapis.com 取 CSS、去
+ * fonts.gstatic.com 取 woff2（实现在 @next/font/dist/google/fetch-resource.js，
+ * 走 node:https.request）。网络一抖，`npm run build` 就以 module-not-found 失败，
+ * 而本地/国内网络和 fnos/build.sh 打包都会偶发撞上 —— 构建不该依赖第三方 CDN 的
+ * 可达性。
+ *
+ * 这两个 woff2 来自官方 geist 包（见同目录 LICENSE.txt，SIL OFL 1.1，可随仓库分发）。
+ * 可变字体不需要声明 weight，覆盖 100–900。
+ */
+const geistSans = localFont({
+  src: "./fonts/Geist-Variable.woff2",
   variable: "--font-geist-sans",
-  subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "./fonts/GeistMono-Variable.woff2",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
