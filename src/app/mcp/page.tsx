@@ -1,9 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { BookOpen, Check, Copy, Plug, Server, Terminal } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  Copy,
+  KeyRound,
+  Plug,
+  RotateCw,
+  Server,
+  Terminal,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/layout/confirm-dialog";
 import { EmptyState } from "@/components/layout/empty-state";
 import { LoadError } from "@/components/layout/load-error";
 import { PageHeader } from "@/components/layout/page-header";
@@ -13,7 +25,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { authApi, mcpApi } from "@/lib/api";
+import { errText, mcpApi } from "@/lib/api";
+import { fmtDateTime } from "@/lib/format";
 import { useAsyncAll } from "@/lib/use-async-data";
 
 /**
@@ -26,10 +39,55 @@ import { useAsyncAll } from "@/lib/use-async-data";
 export default function McpPage() {
   const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll({
     tools: mcpApi.tools,
-    token: authApi.token,
+    keyStatus: mcpApi.keyStatus,
   });
 
   const [copied, setCopied] = useState<string | null>(null);
+
+  /**
+   * 刚生成的密钥明文。
+   *
+   * 只在生成那一次有值 —— 库里存的是 SHA-256 哈希，刷新页面就再也拿不回来了。
+   * 所以它不进 useAsyncAll（那会被后续刷新覆盖），而是单独一个 state，界面上也
+   * 明确写「只显示这一次」。
+   */
+  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<"reset" | "revoke" | null>(null);
+
+  const keyStatus = values.keyStatus ?? { configured: false, createdAt: null, lastUsedAt: null };
+
+  async function generateKey() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await mcpApi.generateKey();
+      setGeneratedKey(result.key);
+      toast.success("已生成新密钥");
+      await reload();
+    } catch (err) {
+      toast.error(errText(err));
+    } finally {
+      setBusy(false);
+      setConfirm(null);
+    }
+  }
+
+  async function revokeKey() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await mcpApi.revokeKey();
+      setGeneratedKey(null);
+      toast.success("已吊销密钥");
+      await reload();
+    } catch (err) {
+      toast.error(errText(err));
+    } finally {
+      setBusy(false);
+      setConfirm(null);
+    }
+  }
 
   async function copyText(text: string, label: string) {
     try {
@@ -53,7 +111,6 @@ export default function McpPage() {
   }
 
   const tools = values.tools?.tools ?? [];
-  const token = values.token?.token ?? "";
   const baseUrl = typeof window === "undefined" ? "" : `${window.location.protocol}//${window.location.host}`;
   const mcpUrl = `${baseUrl}/api/mcp`;
 
@@ -62,7 +119,7 @@ export default function McpPage() {
       mcpServers: {
         "elec-meter": {
           url: mcpUrl,
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          headers: { Authorization: `Bearer ${generatedKey ?? "<你的 MCP 密钥>"}` },
         },
       },
     },
@@ -127,20 +184,79 @@ export default function McpPage() {
                 <CopyButton text={mcpUrl} label="端点" copied={copied} onCopy={copyText} />
               </Field>
 
-              <Field label="认证 Token">
-                <code className="hide-scrollbar min-w-0 flex-1 overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs">
-                  {token || "获取中..."}
-                </code>
-                <CopyButton text={token} label="Token" copied={copied} onCopy={copyText} />
-              </Field>
-
               <p className="text-xs text-muted-foreground">
                 请求头需带{" "}
                 <code className="rounded bg-muted px-1 font-mono">
-                  Authorization: Bearer &lt;token&gt;
+                  Authorization: Bearer &lt;MCP 密钥&gt;
                 </code>
-                。这个 Token 就是当前登录会话的凭据，修改密码或登出后会失效。
+                。也接受当前登录会话的 JWT，方便在浏览器里调试。
               </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <CardTitle>MCP 密钥</CardTitle>
+                  <CardDescription>独立于登录会话，可随时重新生成</CardDescription>
+                </div>
+                {keyStatus.configured ? (
+                  <div className="flex gap-2">
+                    <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirm("reset")}>
+                      <RotateCw />
+                      重新生成
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      disabled={busy}
+                      onClick={() => setConfirm("revoke")}
+                    >
+                      <Trash2 />
+                      吊销
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" disabled={busy} onClick={generateKey}>
+                    <KeyRound />
+                    生成密钥
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {generatedKey ? (
+                <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+                    <TriangleAlert className="size-4" />
+                    只显示这一次，请立刻保存到 MCP 客户端
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="hide-scrollbar min-w-0 flex-1 overflow-x-auto rounded-md bg-background/70 px-3 py-2 font-mono text-xs">
+                      {generatedKey}
+                    </code>
+                    <CopyButton text={generatedKey} label="密钥" copied={copied} onCopy={copyText} />
+                  </div>
+                </div>
+              ) : keyStatus.configured ? (
+                <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                  <div className="font-medium text-foreground">已配置</div>
+                  <div className="mt-1">
+                    创建于 {keyStatus.createdAt ? fmtDateTime(keyStatus.createdAt) : "未知"} · 最后使用{" "}
+                    {keyStatus.lastUsedAt ? fmtDateTime(keyStatus.lastUsedAt) : "从未"}
+                  </div>
+                  <div className="mt-1">
+                    库里只存 SHA-256 哈希，明文连服务端也拿不回来 —— 忘了就「重新生成」。
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+                  还没有独立密钥。生成之后 MCP 客户端就用它接入，与你的登录会话彻底分开 ——
+                  网页登出、改密码都不会影响它。
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -286,6 +402,20 @@ export default function McpPage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <ConfirmDialog
+        open={confirm !== null}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title={confirm === "revoke" ? "吊销 MCP 密钥" : "重新生成 MCP 密钥"}
+        description={
+          confirm === "revoke"
+            ? "吊销后，所有用这个密钥的 MCP 客户端会立刻断开，需要重新配置。"
+            : "重新生成后，旧密钥立刻失效，所有已配置的 MCP 客户端都要换成新的。"
+        }
+        confirmLabel={confirm === "revoke" ? "吊销" : "重新生成"}
+        destructive={confirm === "revoke"}
+        onConfirm={confirm === "revoke" ? revokeKey : generateKey}
+      />
     </div>
   );
 }

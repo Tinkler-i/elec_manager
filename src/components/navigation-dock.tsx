@@ -28,13 +28,21 @@ import { cn } from "@/lib/utils";
  */
 export function NavigationDock() {
   const pathname = usePathname();
+
+  // 登录页不显示导航（原来 Navigation 也是这个行为）。
+  //
+  // 判断放在这一层，让下面的 Dock 整个不挂载。写在下层只做 early return 是不够的：
+  // hook 在 return 之前就跑了，登录页照样会发一次 /api/update，而未登录必然 401。
+  if (pathname === "/login") return null;
+
+  return <Dock pathname={pathname} />;
+}
+
+function Dock({ pathname }: { pathname: string }) {
   const router = useRouter();
   // 有新版本时在「设置」图标上点一个小圆点 —— 提醒得让人看得见，
   // 藏进设置页的 Tab 里等于没提醒
   const update = useUpdateCheck();
-
-  // 登录页不显示导航（原来 Navigation 也是这个行为）
-  if (pathname === "/login") return null;
 
   async function handleLogout() {
     try {

@@ -168,7 +168,7 @@ node server.js
     "elec-meter": {
       "url": "http://your-server:16543/api/mcp",
       "headers": {
-        "Authorization": "Bearer 你的token"
+        "Authorization": "Bearer 你的MCP密钥"
       }
     }
   }
@@ -191,11 +191,15 @@ node server.js
 }
 ```
 
-### 获取 Token
+### 获取 MCP 密钥
 
-1. 登录系统
-2. 访问 `/mcp` 页面查看配置说明
-3. 复制 Token
+1. 登录系统，打开 `/mcp` 页面
+2. 在「MCP 密钥」卡片里点「生成密钥」
+3. **明文只显示这一次**，复制到客户端配置里保存好
+
+密钥只以 SHA-256 哈希存库，服务端也拿不回明文。忘了就点「重新生成」，旧密钥立刻失效；不用 MCP 了就点「吊销」。
+
+MCP 端点也接受当前登录会话的 JWT，方便在浏览器里调试，但客户端请用独立密钥 —— 会话凭据每次登录都会变。
 
 ### MCP 工具列表
 

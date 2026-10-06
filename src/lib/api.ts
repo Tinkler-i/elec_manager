@@ -1,5 +1,6 @@
 import type {
   BackupFile,
+  McpKeyStatus,
   McpToolInfo,
   Reading,
   ReadingInput,
@@ -28,7 +29,18 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
+/** 单次请求的附加行为 */
+interface RequestOptions {
+  /**
+   * 401 是否按「会话失效」处理（跳登录页 + 统一文案），默认是。
+   *
+   * 登录接口必须关掉：它的 401 含义是「密码错误」。被改写成「登录已失效，请重新
+   * 登录」之后，用户看到的提示和实际发生的事对不上，排查时会被带偏。
+   */
+  sessionExpiry?: boolean;
+}
+
+async function request<T>(url: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, init);
@@ -37,7 +49,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     throw new ApiError("网络连接失败，请检查服务是否在运行", 0);
   }
 
-  if (response.status === 401 && typeof window !== "undefined") {
+  if (response.status === 401 && options.sessionExpiry !== false && typeof window !== "undefined") {
     // 会话失效：交给页面跳登录。这里不直接跳，避免在登录页自己踢自己
     if (!window.location.pathname.startsWith("/login")) {
       window.location.href = "/login";
@@ -92,8 +104,11 @@ export function errText(e: unknown): string {
 
 export const authApi = {
   check: () => request<{ authenticated: boolean }>("/api/auth/check"),
+  // sessionExpiry: false —— 这里的 401 是「密码错误」，要原样透给用户
   login: (password: string, remember: boolean) =>
-    request<{ ok: boolean }>("/api/auth/login", jsonInit("POST", { password, remember })),
+    request<{ ok: boolean }>("/api/auth/login", jsonInit("POST", { password, remember }), {
+      sessionExpiry: false,
+    }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", jsonInit("POST")),
   token: () => request<{ token: string }>("/api/auth/token"),
   changePassword: (password: string) =>
@@ -140,6 +155,11 @@ export const backupApi = {
 
 export const mcpApi = {
   tools: () => request<{ tools: McpToolInfo[] }>("/api/mcp/tools"),
+  /** 密钥状态，不含密钥本身 */
+  keyStatus: () => request<McpKeyStatus>("/api/mcp/key"),
+  /** 生成/重新生成。明文密钥只在这一个响应里出现一次 */
+  generateKey: () => request<McpKeyStatus & { key: string }>("/api/mcp/key", jsonInit("POST")),
+  revokeKey: () => request<McpKeyStatus>("/api/mcp/key", jsonInit("DELETE")),
 };
 
 /* ── 更新检查 ───────────────────────────────────────── */

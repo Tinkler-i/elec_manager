@@ -8,7 +8,19 @@ const PUBLIC_PATHS = [
   '/favicon.ico',
 ];
 
+/**
+ * 只做完全匹配的放行路径。
+ *
+ * `/api/mcp` 自带鉴权（会话 JWT 或独立 MCP 密钥），必须在 route 里校验而不是
+ * 这里 —— proxy 跑在 Edge runtime，读不了 SQLite，查不了密钥哈希。
+ *
+ * 单独列一个数组而不是塞进 PUBLIC_PATHS：后者是前缀匹配，会把 `/api/mcp/key`
+ * （生成/吊销密钥，必须先是登录状态）和 `/api/mcp/tools` 一起放行。
+ */
+const PUBLIC_EXACT_PATHS = ['/api/mcp'];
+
 function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_EXACT_PATHS.includes(pathname)) return true;
   return PUBLIC_PATHS.some(p => pathname === p || pathname.startsWith(p + '/'));
 }
 

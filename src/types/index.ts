@@ -47,6 +47,18 @@ export interface McpToolInfo {
   };
 }
 
+/**
+ * MCP 密钥状态。
+ *
+ * **不含密钥本身** —— 库里只存 SHA-256 哈希，生成之后服务端也拿不回明文。
+ * 所以界面上的「管理」只能是看状态 + 重新生成，不能是「查看密钥」。
+ */
+export interface McpKeyStatus {
+  configured: boolean;
+  createdAt: string | null;
+  lastUsedAt: string | null;
+}
+
 /** 新建/编辑读数时提交的载荷 */
 export interface ReadingInput {
   reading_value: number;
