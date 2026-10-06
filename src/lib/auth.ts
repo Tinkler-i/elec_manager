@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { getSetting, setSetting } from './db';
+import { DB_PATH, getSetting, setSetting } from './db';
 
 const TOKEN_EXPIRY = '365d';
 
@@ -22,9 +22,8 @@ export function ensureJwtSecret(): string {
     return process.env.JWT_SECRET;
   }
 
-  // 2. 密钥文件路径：与数据库同目录
-  const dbPath = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
-  const secretFile = path.join(path.dirname(dbPath), 'jwt_secret');
+  // 2. 密钥文件路径：与数据库同目录。路径来源只有 db.ts 一处，别在这里重写表达式
+  const secretFile = path.join(path.dirname(DB_PATH), 'jwt_secret');
 
   try {
     if (fs.existsSync(secretFile)) {

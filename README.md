@@ -203,6 +203,10 @@ MCP 端点也接受当前登录会话的 JWT，方便在浏览器里调试，但
 
 ### MCP 工具列表
 
+> 工具清单以应用内的 `/mcp` 页面为准 —— 页面和 MCP 客户端看到的元数据同源，
+> 都派生自 `src/lib/mcp-tools.ts` 里的唯一定义。下面这张表只是速查，
+> 参数、必填项、准确描述请以页面（或 `GET /api/mcp/tools`）为准，别照着这里改代码。
+
 | 工具 | 说明 |
 |------|------|
 | `add_reading` | 记录电表读数（支持 reading_time） |
@@ -211,7 +215,7 @@ MCP 端点也接受当前登录会话的 JWT，方便在浏览器里调试，但
 | `update_reading` | 编辑读数（值、日期、时间、备注），自动级联修复 |
 | `delete_reading` | 删除读数，自动修正前后读数关联 |
 | `get_stats` | 获取用电统计概览（总用电、本月用电等） |
-| `export_readings` | 导出所有读数数据 |
+| `export_readings` | 导出所有读数数据（`type` 可省略，目前仅支持 `"readings"`） |
 | `backup_database` | 创建数据库备份 |
 | `get_settings` | 查看系统配置（电价、初始读数） |
 
@@ -220,9 +224,13 @@ MCP 端点也接受当前登录会话的 JWT，方便在浏览器里调试，但
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | `JWT_SECRET` | JWT 密钥 | 自动生成并持久化 |
-| `ELEC_DB_PATH` | 数据库路径 | `data/elec.db` |
+| `ELEC_DB_PATH` | SQLite 数据库文件路径 | `data/elec.db` |
+| `ELEC_BACKUP_DIR` | 备份目录。飞牛包指向 `TRIM_PKGVAR`（升级后保留） | `dirname(ELEC_DB_PATH)/backups` |
+| `ELEC_DATA_DIR` | 数据目录覆盖；不设时回退到 `dirname(ELEC_DB_PATH)` | 无（回退） |
 | `PORT` | 服务端口 | `16543` |
 | `HOSTNAME` | 绑定地址 | `0.0.0.0` |
+
+完整的跨模块契约（含 `ELEC_UPDATE_REPO`、`GITHUB_TOKEN` 等）见 [docs/architecture.md](docs/architecture.md)。
 
 ## API 接口
 

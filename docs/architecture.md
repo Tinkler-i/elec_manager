@@ -62,9 +62,9 @@
 
 | 变量 | 谁设置 | 谁读取 | 说明 |
 |---|---|---|---|
-| `ELEC_DB_PATH` | `cmd/main:70` | `src/lib/db.ts:5`、`src/lib/auth.ts:22` | SQLite 文件路径 |
-| `ELEC_BACKUP_DIR` | `cmd/main:71` | `src/lib/db.ts:20` | 备份目录 |
-| `ELEC_DATA_DIR` | **没人设置** | `src/lib/db.ts:17` | 可选覆盖，不设时回退到 `dirname(ELEC_DB_PATH)` |
+| `ELEC_DB_PATH` | `cmd/main:70` | `src/lib/db.ts:14`（`auth.ts` 经它导出的 `DB_PATH` 间接使用） | SQLite 文件路径 |
+| `ELEC_BACKUP_DIR` | `cmd/main:71` | `src/lib/db.ts:29` | 备份目录 |
+| `ELEC_DATA_DIR` | **没人设置** | `src/lib/db.ts:26` | 可选覆盖，不设时回退到 `dirname(ELEC_DB_PATH)` |
 | `ELEC_UPDATE_REPO` | **没人设置** | `src/app/api/update/route.ts:20` | 更新检查读的仓库，有默认值 |
 | `JWT_SECRET` | **没人设置** | `src/lib/auth.ts:17`、`src/proxy.ts:36` | 不设时由 `auth.ts` 读或生成 `jwt_secret` 文件 |
 | `GITHUB_TOKEN` | 可选 | `src/app/api/update/route.ts:63` | 提高 GitHub API 配额，匿名只有 60 次/小时 |

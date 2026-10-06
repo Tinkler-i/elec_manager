@@ -194,15 +194,26 @@ export interface MonthlyConsumption {
  * 分析页「月度用电对比」：最近 N 个月各用了多少度。
  *
  * 首月没有上个月可减，用当月第一条读数的 previous_reading 作为基线。
+ *
+ * ⚠️ 同一个口径在 `src/lib/db.ts` 的 getStats() 和本文件的 annualSeries() 里也有一份，
+ * 改一处要同步另两处。「第一条 / 最后一条」必须按 **(reading_date, reading_time)** 一起
+ * 排 —— 只比日期的话，同一天有多笔读数时结果取决于输入顺序，与 getStats（它的查询
+ * 顺序相反）会算出不同的数：实测 2026-01-10 08:00=100、20:00=180、2026-02-10=300
+ * 这组数据，两边总数会差成 300 与 200。
+ *
+ * 为什么没抽成共享函数：`npm test` 用 `node --experimental-strip-types` 直接 import
+ * 本文件和 db.ts，raw Node 的 ESM 解析器不认 `src/lib` 里的无扩展名相对导入，抽出去
+ * 会让 npm test 直接 ERR_MODULE_NOT_FOUND（见 scripts/test-calculations.ts 的说明）。
  */
 export function monthlyConsumption(readings: Reading[], limit = 6): MonthlyConsumption[] {
+  const keyOf = (r: Reading) => `${r.reading_date} ${r.reading_time ?? ''}`;
   const lastOfMonth: Record<string, Reading> = {};
   const firstOfMonth: Record<string, Reading> = {};
 
   readings.forEach((r) => {
     const month = r.reading_date.substring(0, 7);
-    if (!lastOfMonth[month] || r.reading_date > lastOfMonth[month].reading_date) lastOfMonth[month] = r;
-    if (!firstOfMonth[month] || r.reading_date < firstOfMonth[month].reading_date) firstOfMonth[month] = r;
+    if (!lastOfMonth[month] || keyOf(r) > keyOf(lastOfMonth[month])) lastOfMonth[month] = r;
+    if (!firstOfMonth[month] || keyOf(r) < keyOf(firstOfMonth[month])) firstOfMonth[month] = r;
   });
 
   const months = Object.keys(lastOfMonth).sort();
@@ -233,6 +244,8 @@ export interface AnnualSeries {
  * 两者在图上必须能区分。
  */
 export function annualSeries(readings: Reading[]): AnnualSeries {
+  // 「第一条 / 最后一条」按 (日期,时间) 定序，口径与 monthlyConsumption / getStats 一致
+  const keyOf = (r: Reading) => `${r.reading_date} ${r.reading_time ?? ''}`;
   const lastOfYearMonth: Record<string, Record<string, Reading>> = {};
   const firstOfYearMonth: Record<string, Record<string, Reading>> = {};
 
@@ -245,12 +258,10 @@ export function annualSeries(readings: Reading[]): AnnualSeries {
       lastOfYearMonth[year] = {};
       firstOfYearMonth[year] = {};
     }
-    if (!lastOfYearMonth[year][month] || r.reading_date > lastOfYearMonth[year][month].reading_date) {
-      lastOfYearMonth[year][month] = r;
-    }
-    if (!firstOfYearMonth[year][month] || r.reading_date < firstOfYearMonth[year][month].reading_date) {
-      firstOfYearMonth[year][month] = r;
-    }
+    const last = lastOfYearMonth[year][month];
+    const first = firstOfYearMonth[year][month];
+    if (!last || keyOf(r) > keyOf(last)) lastOfYearMonth[year][month] = r;
+    if (!first || keyOf(r) < keyOf(first)) firstOfYearMonth[year][month] = r;
   });
 
   const years = Object.keys(lastOfYearMonth).sort();

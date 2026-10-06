@@ -60,7 +60,10 @@ export const MCP_TOOLS = {
     title: '导出数据',
     description: '导出全部电表读数记录，返回总条数与明细数据。',
     inputSchema: {
-      type: z.literal('readings').describe('导出类型，目前仅支持 "readings"'),
+      type: z
+        .string()
+        .optional()
+        .describe('导出类型，可选，目前仅支持 "readings"（不传按 "readings" 处理，传别的值会报错）'),
     },
   },
   backup_database: {
