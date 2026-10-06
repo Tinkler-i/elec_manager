@@ -53,3 +53,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 协作文件不进仓库：分工、分支、发布规则和待办放在仓库外的共享目录
+# （D:\Code\AI\Elec\collab\）。公开仓库只放代码和面向使用者的文档。
+AGENTS.md
+CLAUDE.md
+COLLAB.md
+AGENT-TODO.md
