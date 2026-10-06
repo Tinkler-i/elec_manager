@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getDb, generateId, getRatePerKwh } from './db';
+import { BACKUP_DIR, getDb, generateId, getRatePerKwh } from './db';
+import { toPublicSettings } from './settings-keys';
 import fs from 'fs';
 import path from 'path';
 
@@ -172,7 +173,9 @@ export function createMcpServer(): McpServer {
   }, async () => {
     try {
       const db = getDb();
-      const backupDir = path.join(process.cwd(), 'data', 'backups');
+      // 必须用 BACKUP_DIR（飞牛下指向 TRIM_PKGVAR/backups）。standalone 的
+      // process.cwd() 是安装目录，升级整体替换，备份写那里会跟着没。
+      const backupDir = BACKUP_DIR;
       if (!fs.existsSync(backupDir)) {
         fs.mkdirSync(backupDir, { recursive: true });
       }
@@ -326,9 +329,8 @@ export function createMcpServer(): McpServer {
     try {
       const db = getDb();
       const settings = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
-      const result: Record<string, string> = {};
-      settings.forEach(s => { result[s.key] = s.value; });
-      return jsonResult(result);
+      // auth_password / mcp_key_* 不外发，名单见 src/lib/settings-keys.ts
+      return jsonResult(toPublicSettings(settings));
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '获取设置失败');
     }
