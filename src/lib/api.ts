@@ -110,7 +110,6 @@ export const authApi = {
       sessionExpiry: false,
     }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", jsonInit("POST")),
-  token: () => request<{ token: string }>("/api/auth/token"),
   changePassword: (password: string) =>
     request<{ ok: boolean }>("/api/auth/password", jsonInit("PUT", { password })),
 };

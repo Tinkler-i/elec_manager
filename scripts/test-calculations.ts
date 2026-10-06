@@ -470,12 +470,153 @@ console.log('\n═══ TEST 9: 同一天多次记录 - 日用电量汇总═�
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// 回归测试（A1 / A2 / A3）—— 直接调用 src/lib 里的生产代码
+//
+// 与上面的图表用例不同：这些不复制实现，而是 import 真代码。故意把 src/lib
+// 里的实现改坏，这里必须变红；改不红就说明测试没测到东西。
+//
+// 为什么用动态 import + 查询串：BACKUP_DIR / DB_PATH 是模块加载时读环境变量算出来的，
+// 要分别验证「设了 / 没设」两条分支，就得让模块用不同 URL 重新求值一次。
+// A5（冷启动会话）需要起进程，单测覆盖不了，另见 scripts/test-cold-start.mjs。
+// ═══════════════════════════════════════════════════════════════════
+
+async function runRegressionTests() {
+  const path = await import('node:path');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const { pathToFileURL } = await import('node:url');
+
+  const libUrl = (rel: string, bust: string) =>
+    `${pathToFileURL(path.join(__dirname, '..', 'src', 'lib', rel)).href}?${bust}`;
+
+  // ── A1：敏感设置不外发 ──────────────────────────────────────────
+  console.log('\n═══ TEST 10: A1 敏感设置不外发（toPublicSettings）═══');
+  {
+    const { toPublicSettings, isSensitiveSettingKey } = await import(libUrl('settings-keys.ts', 'a1'));
+    const out = toPublicSettings([
+      { key: 'rate_per_kwh', value: '0.56' },
+      { key: 'auth_password', value: '$2b$10$abcdefghijklmnopqrstuv' },
+      { key: 'mcp_key_hash', value: 'deadbeef' },
+      { key: 'mcp_key_created_at', value: '2026-10-06T00:00:00.000Z' },
+      { key: 'mcp_key_last_used_at', value: '2026-10-06T01:00:00.000Z' },
+      { key: 'initial_reading', value: '0' },
+    ]);
+    assert(!('auth_password' in out), 'A1: auth_password 被过滤');
+    assert(!('mcp_key_hash' in out), 'A1: mcp_key_hash 被过滤');
+    assert(!('mcp_key_created_at' in out), 'A1: mcp_key_created_at 被过滤');
+    assert(!('mcp_key_last_used_at' in out), 'A1: mcp_key_last_used_at 被过滤');
+    assert(out.rate_per_kwh === '0.56', 'A1: rate_per_kwh 保留', out.rate_per_kwh, '0.56');
+    assert(out.initial_reading === '0', 'A1: initial_reading 保留', out.initial_reading, '0');
+    assert(Object.keys(out).length === 2, 'A1: 只返回 2 个非敏感项', Object.keys(out).length, 2);
+    assert(isSensitiveSettingKey('auth_password'), 'A1: isSensitiveSettingKey(auth_password)=true');
+    assert(!isSensitiveSettingKey('rate_per_kwh'), 'A1: isSensitiveSettingKey(rate_per_kwh)=false');
+  }
+
+  // ── A2：备份目录 ────────────────────────────────────────────────
+  console.log('\n═══ TEST 11: A2 备份目录（BACKUP_DIR）═══');
+  {
+    const savedEnv = {
+      ELEC_DB_PATH: process.env.ELEC_DB_PATH,
+      ELEC_DATA_DIR: process.env.ELEC_DATA_DIR,
+      ELEC_BACKUP_DIR: process.env.ELEC_BACKUP_DIR,
+    };
+    const base = path.join(os.tmpdir(), 'elec-a2-probe');
+    try {
+      process.env.ELEC_DB_PATH = path.join(base, 'data', 'elec.db');
+      delete process.env.ELEC_DATA_DIR;
+
+      process.env.ELEC_BACKUP_DIR = path.join(base, 'explicit-backups');
+      const explicit = await import(libUrl('db.ts', 'a2-explicit'));
+      assert(
+        explicit.BACKUP_DIR === process.env.ELEC_BACKUP_DIR,
+        'A2: 设了 ELEC_BACKUP_DIR 就用它（飞牛升级保留的那个目录）',
+        explicit.BACKUP_DIR,
+        process.env.ELEC_BACKUP_DIR,
+      );
+
+      delete process.env.ELEC_BACKUP_DIR;
+      const fallback = await import(libUrl('db.ts', 'a2-fallback'));
+      const expectedFallback = path.join(path.dirname(process.env.ELEC_DB_PATH), 'backups');
+      assert(
+        fallback.BACKUP_DIR === expectedFallback,
+        'A2: 未设时回退到 dirname(ELEC_DB_PATH)/backups',
+        fallback.BACKUP_DIR,
+        expectedFallback,
+      );
+
+      process.env.ELEC_DATA_DIR = path.join(base, 'custom-data');
+      const withDataDir = await import(libUrl('db.ts', 'a2-datadir'));
+      const expectedDataDir = path.join(process.env.ELEC_DATA_DIR, 'backups');
+      assert(
+        withDataDir.BACKUP_DIR === expectedDataDir,
+        'A2: 设了 ELEC_DATA_DIR 时跟它走',
+        withDataDir.BACKUP_DIR,
+        expectedDataDir,
+      );
+    } finally {
+      for (const [k, v] of Object.entries(savedEnv)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  }
+
+  // ── A3：同一天两笔 ──────────────────────────────────────────────
+  console.log('\n═══ TEST 12: A3 同一天两笔（findPreviousReading / findNextReading）═══');
+  {
+    const savedDbPath = process.env.ELEC_DB_PATH;
+    // 固定目录：better-sqlite3 的连接在测试进程退出前不会关闭，Windows 上删不掉，
+    // 所以每轮先清掉上一轮留下的，避免系统临时目录越积越多。
+    const tmpDir = path.join(os.tmpdir(), 'elec-a3-test');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      process.env.ELEC_DB_PATH = path.join(tmpDir, 'elec.db');
+      const db = await import(libUrl('db.ts', `a3-${Date.now()}`));
+
+      const first = db.createReading({ reading_value: 1000, reading_date: '2026-09-15', reading_time: '08:00' });
+      assert(first.previous_reading === 0, 'A3: 第一笔用初始读数 0', first.previous_reading, 0);
+
+      const second = db.createReading({ reading_value: 1010, reading_date: '2026-09-15', reading_time: '18:00' });
+      assert(second.previous_reading === 1000, 'A3: 同日第二笔取当天更早那笔', second.previous_reading, 1000);
+      assert(second.units_consumed === 10, 'A3: 同日第二笔用量 = 10（不是 1010）', second.units_consumed, 10);
+
+      const prev = db.findPreviousReading('2026-09-15', '18:00');
+      assert(prev?.reading_value === 1000, 'A3: findPreviousReading 返回当天更早那笔', prev?.reading_value, 1000);
+
+      const next = db.findNextReading('2026-09-15', '08:00');
+      assert(next?.reading_value === 1010, 'A3: findNextReading 返回当天更晚那笔', next?.reading_value, 1010);
+
+      assert(db.findPreviousReading('2026-09-15', '08:00') === undefined, 'A3: 当天最早那笔没有前一条');
+
+      const excluded = db.findPreviousReading('2026-09-15', '18:00', second.id);
+      assert(excluded?.reading_value === 1000, 'A3: excludeId 排除自己后仍找到 1000', excluded?.reading_value, 1000);
+    } finally {
+      if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
+      else process.env.ELEC_DB_PATH = savedDbPath;
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // Windows 上 sqlite 连接未关，临时文件可能删不掉；留在系统临时目录里，不影响测试结论
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // SUMMARY
 // ═══════════════════════════════════════════════════════════════════
-console.log(`\n${'═'.repeat(60)}`);
-console.log(`结果: ${passed} 通过, ${failed} 失败`);
-console.log(`${'═'.repeat(60)}`);
+runRegressionTests()
+  .catch((e: unknown) => {
+    failed++;
+    console.log(`  ✗ 回归测试执行失败: ${e instanceof Error ? e.message : String(e)}`);
+  })
+  .then(() => {
+    console.log(`\n${'═'.repeat(60)}`);
+    console.log(`结果: ${passed} 通过, ${failed} 失败`);
+    console.log(`${'═'.repeat(60)}`);
 
-if (failed > 0) {
-  process.exit(1);
-}
+    if (failed > 0) {
+      process.exit(1);
+    }
+  });

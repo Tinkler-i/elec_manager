@@ -25,22 +25,6 @@ export function fmtMoney(value: number | null | undefined): string {
   return `¥${fmtNumber(value, 2)}`;
 }
 
-/** 压缩显示：图表轴标签用，12345 → "1.2万" */
-export function fmtCompact(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return "-";
-  if (Math.abs(value) >= 10000) return `${(value / 10000).toFixed(1)}万`;
-  return fmtNumber(value, value >= 100 ? 0 : 1);
-}
-
-/**
- * `2026-10-06` → `2026-10-06`（原样）。
- * 后端给的是纯日期串，不要走 Date 解析 —— `new Date("2026-10-06")` 按 UTC
- * 解析，东八区会显示成 10-05，是个很容易踩的坑。
- */
-export function fmtDate(value: string | null | undefined): string {
-  return value || "-";
-}
-
 /** 时间戳 / ISO 串 → `2026-10-06 12:30`，本地时区 */
 export function fmtDateTime(value: string | number | Date | null | undefined): string {
   if (value === null || value === undefined || value === "") return "-";
@@ -56,11 +40,6 @@ export function fmtSize(bytes: number | null | undefined): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
-}
-
-/** `2026-10-06` → `10-06`，图表横轴用 */
-export function shortDate(value: string): string {
-  return value.length >= 10 ? value.slice(5) : value;
 }
 
 /** 今天的 `YYYY-MM-DD`（本地时区，不用 toISOString —— 那是 UTC） */
