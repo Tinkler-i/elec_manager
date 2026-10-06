@@ -1,0 +1,58 @@
+name: Bug 报告
+description: 报告一个可以复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先确认两件事：问题能稳定复现；不是本地环境或配置引起的。
+
+        粘贴日志和截图前**先脱敏** —— 去掉 token、密钥、内网地址、真实读数。
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象
+      description: 实际发生了什么？预期是什么？
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开 …
+        2. 点击 …
+        3. 看到 …
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: 应用「设置 → 关于」里显示的版本号
+      placeholder: 1.9.4
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - 飞牛应用包
+        - Docker
+        - 本地 npm run dev
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 相关日志，已脱敏。
+      render: shell
+    validations:
+      required: false
