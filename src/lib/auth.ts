@@ -8,11 +8,15 @@ import { getDb } from './db';
 const TOKEN_EXPIRY = '365d';
 
 /**
- * 获取 JWT Secret
+ * 初始化 JWT Secret，并写回 `process.env.JWT_SECRET`。
  * 优先级：环境变量 JWT_SECRET > 持久化文件 > 自动生成
  * 密钥存储在数据库同目录下的 jwt_secret 文件，确保重启/升级后仍有效
+ *
+ * 除了这里内部的懒加载调用，`src/instrumentation.ts` 会在服务启动时先调一次 ——
+ * `src/proxy.ts` 在 Edge runtime 每个请求都要密钥，而它只能读 process.env，
+ * 冷启动后如果没人先跑过这个函数，proxy 就验证不了任何 token。
  */
-function getJwtSecret(): string {
+export function ensureJwtSecret(): string {
   // 1. 环境变量优先
   if (process.env.JWT_SECRET) {
     return process.env.JWT_SECRET;
@@ -82,12 +86,12 @@ export function changePassword(newPassword: string) {
 }
 
 export function generateToken(): string {
-  return jwt.sign({ auth: true }, getJwtSecret(), { expiresIn: TOKEN_EXPIRY });
+  return jwt.sign({ auth: true }, ensureJwtSecret(), { expiresIn: TOKEN_EXPIRY });
 }
 
 export function verifyToken(token: string): boolean {
   try {
-    jwt.verify(token, getJwtSecret());
+    jwt.verify(token, ensureJwtSecret());
     return true;
   } catch {
     return false;
