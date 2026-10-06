@@ -57,7 +57,17 @@ jobs:
           node -e "const D=require('better-sqlite3'); new D(':memory:').exec('create table t(a)'); console.log('better-sqlite3 在 ABI 127 下可加载')"
 
       # 发版前的质量门。build-fpk.yml 原来只构建，tag 一打就直接出包，
-      # 烂代码能进 Release。这两步失败就中止，不出包。
+      # 烂代码能进 Release。下面几步失败就中止，不出包。
+      #
+      # 先 typegen 再 tsc：tsconfig 的 include 里有 `.next/types/**/*.ts`，那是 typegen
+      # 生成的路由类型。干净检出时这个目录不存在 —— tsc 不会因此报错（实测），但会少查
+      # 这一层。先生成出来，类型检查才覆盖到生成的路由类型。
+      - name: 生成 Next 类型声明
+        run: npx next typegen
+
+      - name: 类型检查
+        run: npx tsc --noEmit
+
       - name: Lint
         run: npm run lint
 
