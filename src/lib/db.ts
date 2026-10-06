@@ -9,7 +9,9 @@ import type { Reading, Setting, Stats } from '../types';
 // 存在 fnos/App.Native.ElecMeter/app/server/（上一次打包的产物），它就会被 trace 进去，
 // 于是 fnos/build.sh 第二轮把上一轮的产物嵌进新包。所有路径定义与 fs 调用都要带上这个注释。
 // 详见 backupDatabase() 上面那段说明。
-// export：src/lib/auth.ts 要用它，别再自己拼一遍默认路径（task-26 的收敛项）。
+//
+// export：src/lib/auth.ts 要用它（jwt_secret 文件要放在库同目录）。这里曾经在两处各写
+// 一遍同样的 `ELEC_DB_PATH || cwd/data/elec.db`，改一边忘一边就会让密钥文件落到别的目录去。
 export const DB_PATH = process.env.ELEC_DB_PATH || path.join(/*turbopackIgnore: true*/ process.cwd(), 'data', 'elec.db');
 
 /**
@@ -462,6 +464,15 @@ export function recalculatePreviousReadings(): { count: number; initialReading: 
  *   · 跨月的那笔读数按自然月边界归属，不会被整笔算进读数所在的月份；
  *   · 抄表回退 / 改错造成的负差值截成 0，不会把总用电量冲小。
  * MCP 的 get_stats 以前用的是 SUM 那套，现在两条路径共用这一份。
+ *
+ * ⚠️ 同一个口径在 `src/lib/chart-data.ts` 的 monthlyConsumption / annualSeries 里
+ * 也有一份（分析页用）。**改这里必须同步改那边** —— 三处并列时的定序要一致，否则
+ * 同一天有多笔读数时，仪表盘和分析页会算出不同的数。
+ *
+ * 为什么没有抽成一个共享函数：`npm test` 用 `node --experimental-strip-types` 直接
+ * import 这两个文件，raw Node 的 ESM 解析器不认 `src/lib` 里的无扩展名相对导入
+ * （`from './xxx'`），抽出去会让 npm test 直接 ERR_MODULE_NOT_FOUND。要收敛得先解决
+ * 测试入口的解析问题（见 scripts/test-calculations.ts 里的同款说明）。
  */
 export function getStats(): Stats {
   const db = getDb();
@@ -469,11 +480,11 @@ export function getStats(): Stats {
   const totalReadings = (db.prepare('SELECT COUNT(*) as count FROM readings').get() as { count: number }).count;
 
   const readings = db.prepare(
-    'SELECT id, reading_value, reading_date, previous_reading FROM readings ORDER BY reading_date ASC',
+    'SELECT reading_value, reading_date, reading_time, previous_reading FROM readings',
   ).all() as Array<{
-    id: string;
     reading_value: number;
     reading_date: string;
+    reading_time: string | null;
     previous_reading: number | null;
   }>;
 
@@ -484,47 +495,41 @@ export function getStats(): Stats {
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
   if (readings.length > 0) {
-    // Group readings by month and get the last reading of each month
-    const lastReadingOfMonth: Record<string, typeof readings[0]> = {};
-    readings.forEach(r => {
+    type Row = (typeof readings)[0];
+    // 排序键：日期 + 时间。只比日期的话，同一天有多笔（reading_time 就是为这个场景
+    // 设计的）时「当月最后一条」取决于输入顺序 —— 本查询与分析页拿到的顺序相反，
+    // 于是同一个月的数字能差出好几倍（实测 300 vs 200）。
+    const keyOf = (r: Row) => `${r.reading_date} ${r.reading_time ?? ''}`;
+
+    const lastReadingOfMonth: Record<string, Row> = {};
+    const firstReadingOfMonth: Record<string, Row> = {};
+    readings.forEach((r) => {
       const month = r.reading_date.substring(0, 7);
-      if (!lastReadingOfMonth[month] || r.reading_date > lastReadingOfMonth[month].reading_date) {
+      if (!lastReadingOfMonth[month] || keyOf(r) > keyOf(lastReadingOfMonth[month])) {
         lastReadingOfMonth[month] = r;
       }
-    });
-
-    const sortedMonths = Object.keys(lastReadingOfMonth).sort();
-
-    // Get the first reading of each month for baseline calculation
-    const firstReadingOfMonth: Record<string, typeof readings[0]> = {};
-    readings.forEach(r => {
-      const month = r.reading_date.substring(0, 7);
-      if (!firstReadingOfMonth[month] || r.reading_date < firstReadingOfMonth[month].reading_date) {
+      if (!firstReadingOfMonth[month] || keyOf(r) < keyOf(firstReadingOfMonth[month])) {
         firstReadingOfMonth[month] = r;
       }
     });
 
-    // Calculate total and current month consumption based on month boundaries
-    sortedMonths.forEach((month, index) => {
+    const sortedMonths = Object.keys(lastReadingOfMonth).sort();
+    for (let i = 0; i < sortedMonths.length; i++) {
+      const month = sortedMonths[i];
       const currentReading = lastReadingOfMonth[month];
-      const prevReading = index > 0 ? lastReadingOfMonth[sortedMonths[index - 1]] : null;
+      const prevReading = i > 0 ? lastReadingOfMonth[sortedMonths[i - 1]] : undefined;
 
-      let monthConsumed: number;
-      if (prevReading) {
-        monthConsumed = currentReading.reading_value - prevReading.reading_value;
-      } else {
-        // First month: use the first reading's previous_reading as baseline
-        const firstReading = firstReadingOfMonth[month];
-        const baseline = firstReading?.previous_reading ?? 0;
-        monthConsumed = currentReading.reading_value - baseline;
-      }
+      // 第一个月没有上个月可减，用当月第一条读数的 previous_reading 当基线
+      const monthConsumed = prevReading
+        ? currentReading.reading_value - prevReading.reading_value
+        : currentReading.reading_value - (firstReadingOfMonth[month]?.previous_reading ?? 0);
 
       totalConsumed += Math.max(0, monthConsumed);
 
       if (month === currentMonth) {
         currentMonthConsumed = Math.max(0, monthConsumed);
       }
-    });
+    }
   }
 
   const rate = getRatePerKwh();

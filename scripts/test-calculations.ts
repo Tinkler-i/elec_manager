@@ -469,10 +469,10 @@ async function runRegressionTests() {
   const libUrl = (rel: string, bust: string) =>
     `${pathToFileURL(path.join(here, '..', 'src', 'lib', rel)).href}?${bust}`;
 
-  // ── A1：敏感设置不外发 ──────────────────────────────────────────
-  console.log('\n═══ TEST 10: A1 敏感设置不外发（toPublicSettings）═══');
+  // ── A1：设置出口只放行白名单（fail closed）──────────────────────
+  console.log('\n═══ TEST 10: A1 只放行白名单设置（toPublicSettings）═══');
   {
-    const { toPublicSettings, isSensitiveSettingKey } = await import(libUrl('settings-keys.ts', 'a1'));
+    const { toPublicSettings, isPublicSettingKey } = await import(libUrl('settings-keys.ts', 'a1'));
     const out = toPublicSettings([
       { key: 'rate_per_kwh', value: '0.56' },
       { key: 'auth_password', value: '$2b$10$abcdefghijklmnopqrstuv' },
@@ -480,16 +480,21 @@ async function runRegressionTests() {
       { key: 'mcp_key_created_at', value: '2026-10-06T00:00:00.000Z' },
       { key: 'mcp_key_last_used_at', value: '2026-10-06T01:00:00.000Z' },
       { key: 'initial_reading', value: '0' },
+      // 故意放一个「以后新增、还没加进白名单」的普通配置项：白名单模型下它必须被
+      // 挡住（fail closed）。这条是 A1 的关键性质 —— 黑名单模型下它会被放行。
+      { key: 'some_future_setting', value: 'whatever' },
     ]);
     assert(!('auth_password' in out), 'A1: auth_password 被过滤');
     assert(!('mcp_key_hash' in out), 'A1: mcp_key_hash 被过滤');
     assert(!('mcp_key_created_at' in out), 'A1: mcp_key_created_at 被过滤');
     assert(!('mcp_key_last_used_at' in out), 'A1: mcp_key_last_used_at 被过滤');
+    assert(!('some_future_setting' in out), 'A1: 未列出的新 key 也不外发（fail closed）');
     assert(out.rate_per_kwh === '0.56', 'A1: rate_per_kwh 保留', out.rate_per_kwh, '0.56');
     assert(out.initial_reading === '0', 'A1: initial_reading 保留', out.initial_reading, '0');
-    assert(Object.keys(out).length === 2, 'A1: 只返回 2 个非敏感项', Object.keys(out).length, 2);
-    assert(isSensitiveSettingKey('auth_password'), 'A1: isSensitiveSettingKey(auth_password)=true');
-    assert(!isSensitiveSettingKey('rate_per_kwh'), 'A1: isSensitiveSettingKey(rate_per_kwh)=false');
+    assert(Object.keys(out).length === 2, 'A1: 只返回 2 个白名单项', Object.keys(out).length, 2);
+    assert(isPublicSettingKey('rate_per_kwh'), 'A1: isPublicSettingKey(rate_per_kwh)=true');
+    assert(!isPublicSettingKey('auth_password'), 'A1: isPublicSettingKey(auth_password)=false');
+    assert(!isPublicSettingKey('some_future_setting'), 'A1: isPublicSettingKey(未列出)=false');
   }
 
   // ── A2：备份目录 ────────────────────────────────────────────────

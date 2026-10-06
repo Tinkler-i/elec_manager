@@ -103,8 +103,15 @@ export function createMcpServer(): McpServer {
   });
 
   // ── 导出数据 ──────────────────────────────────────────────────────────
-  server.registerTool('export_readings', { ...MCP_TOOLS.export_readings }, async () => {
+  server.registerTool('export_readings', { ...MCP_TOOLS.export_readings }, async (args) => {
     try {
+      // type 原来在 schema 里是必填、handler 却从未读它 —— 传 "stats" 也会静默拿到
+      // readings。现在不传按 "readings" 处理（老客户端照旧），传别的值明确报错。
+      const type = args.type ?? 'readings';
+      if (type !== 'readings') {
+        return errorResult(`不支持的导出类型：${type}（目前仅支持 "readings"）`);
+      }
+
       const data = getReadings();
       return jsonResult({ count: data.length, data });
     } catch (e) {

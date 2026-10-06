@@ -5,7 +5,6 @@ import type {
   Reading,
   ReadingInput,
   SettingsMap,
-  Stats,
   UpdateInfo,
 } from "@/types";
 
@@ -134,10 +133,6 @@ export const readingsApi = {
 export const settingsApi = {
   get: () => request<SettingsMap>("/api/settings"),
   update: (patch: SettingsMap) => request<SettingsMap>("/api/settings", jsonInit("PUT", patch)),
-};
-
-export const statsApi = {
-  get: () => request<Stats>("/api/stats"),
 };
 
 export const backupApi = {
