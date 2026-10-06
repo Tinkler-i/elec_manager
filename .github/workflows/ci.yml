@@ -58,6 +58,13 @@ jobs:
       - name: 构建
         run: npm run build
 
+      # 显式再跑一次构建后检查。它同时挂在 package.json 的 postbuild 上（`npm run build`
+      # 会自动触发），这里显式跑有两个好处：日志里看得见，不用翻 build 输出；postbuild
+      # 被误删或改名时这一步仍然拦得住。判据见脚本头部 —— standalone 顶层出现任何
+      # 「仓库根目录里也存在」的条目就报错。
+      - name: 检查 standalone 顶层干净
+        run: node scripts/lib/check-standalone-clean.mjs
+
       # 构建后的真实进程校验：都依赖 .next/standalone/server.js，必须在 build 之后，
       # 所以不能并进 `npm test`。两个脚本各自起真进程、用临时数据目录和固定端口
       # （冷启动 16801/16802、备份 16811/16812），不需要额外环境变量。

@@ -70,6 +70,20 @@ Release 页面上的 `releases/latest` 是应用内更新检查读取的地址�
 
 如果这次修复了用户可见的问题，在 Release 说明里写清楚现象和触发条件。
 
+## 构建
+
+**打包与发布必须走 `npm run build`，不要直接 `next build`。**
+
+构建后的 standalone 检查（`scripts/lib/check-standalone-clean.mjs`）挂在 `package.json`
+的 `postbuild` 上，只有 `npm run build` 会触发它。直接 `next build` 会静默绕过 ——
+产物带着泄漏，构建还是绿的。CI 的 `ci.yml` / `build-fpk.yml` 和 `fnos/build.sh` 里
+另有一步**显式调用**同一个脚本，不依赖这个钩子。
+
+检查的判据：`.next/standalone` 顶层出现任何**仓库根目录里也存在**的条目就报错
+（`data/`、`src/`、`Dockerfile`、`.env`…… 只有 `.next` / `node_modules` /
+`package.json` / `server.js` 四项放行）。这些是构建期被 Turbopack trace 进来的仓库内容，
+不该随产物发出去。
+
 ## 回滚
 
 发版出问题时：
