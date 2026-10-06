@@ -1,96 +1,66 @@
-"use client";
-
 import { ChartLine, Coins, Gauge, Zap } from "lucide-react";
 
+import { AutoRefresh } from "@/components/auto-refresh";
 import { UsageChart } from "@/components/charts/usage-chart";
 import { EmptyState } from "@/components/layout/empty-state";
-import { LoadError } from "@/components/layout/load-error";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { readingsApi, settingsApi, statsApi } from "@/lib/api";
+import { getRatePerKwh, getReadings, getStats } from "@/lib/db";
 import { fmtKwh, fmtMoney, fmtNumber } from "@/lib/format";
-import { useAsyncAll } from "@/lib/use-async-data";
-import { useHeartbeat } from "@/lib/use-heartbeat";
 
+/**
+ * 读数据库的页面必须显式声明动态渲染。
+ *
+ * 页面里没有 `cookies()` / `headers()` / `searchParams` 这类动态 API，Next 默认
+ * 会把它静态预渲染 —— `better-sqlite3` 读出来的数据会在 build 时被烤进 HTML，
+ * 上线后仪表盘永远停在构建那一刻，而且本地测试完全看不出问题。
+ */
+export const dynamic = "force-dynamic";
+
+/** 停留期间自动刷新；标签页隐藏时跳过、切回来立即刷一次（见 use-heartbeat） */
 const REFRESH_MS = 30_000;
 
 /**
  * 仪表盘。
  *
- * 三份数据一起并发取（统计 / 读数 / 设置），任一份失败不影响其余两份 ——
- * 设置取不到时电费单价退回默认值 0.56，但用电量照常显示。
+ * 数据在服务端取好再渲染，首屏 HTML 里就是最终数字，所以没有「客户端加载中」
+ * 这一态 —— 加载态交给根段的 loading.tsx。取数抛错会冒到 src/app/error.tsx，
+ * 不会被渲染成「暂无数据」。
+ *
+ * 原来这里是三个接口并发（统计 / 读数 / 设置），现在同一个渲染里串行查
+ * SQLite（同步 API）。请求量小，代价可接受，换来的是首屏就有数据。
  */
 export default function DashboardPage() {
-  const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll(
-    {
-      stats: statsApi.get,
-      readings: readingsApi.list,
-      settings: settingsApi.get,
-    },
-    [],
-    [],
-  );
-
-  // 停留期间每 30 秒重拉一次，页面切走时不刷（见 use-heartbeat）
-  useHeartbeat(() => void reload(), REFRESH_MS);
-
-  if (isInitialFailed) {
-    return (
-      <>
-        <PageHeader title="仪表盘" description="电表运行概览" />
-        <LoadError className="py-24" error={errors.stats ?? errors.readings} onRetry={reload} />
-      </>
-    );
-  }
-
-  const stats = values.stats;
-  const readings = values.readings ?? [];
-  const rate = Number(values.settings?.rate_per_kwh ?? 0.56);
+  const stats = getStats();
+  const readings = getReadings();
+  const rate = getRatePerKwh();
 
   return (
     <div className="space-y-5">
+      <AutoRefresh intervalMs={REFRESH_MS} />
+
       <PageHeader
         title="仪表盘"
-        description={
-          stats ? `共 ${fmtNumber(stats.totalReadings, 0)} 条读数 · 单价 ${fmtMoney(rate)}/度` : "电表运行概览"
-        }
+        description={`共 ${fmtNumber(stats.totalReadings, 0)} 条读数 · 单价 ${fmtMoney(rate)}/度`}
       />
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="本月用电"
-          value={`${fmtKwh(stats?.currentMonthConsumed)} 度`}
+          value={`${fmtKwh(stats.currentMonthConsumed)} 度`}
           icon={Zap}
           tone="accent"
-          loading={isInitialLoading}
         />
         <StatCard
           label="本月费用"
-          value={fmtMoney(stats?.currentMonthAmount)}
+          value={fmtMoney(stats.currentMonthAmount)}
           icon={Coins}
           tone="accent"
-          loading={isInitialLoading}
         />
-        <StatCard
-          label="累计用电"
-          value={`${fmtKwh(stats?.totalConsumed)} 度`}
-          icon={Gauge}
-          loading={isInitialLoading}
-        />
-        <StatCard
-          label="累计费用"
-          value={fmtMoney(stats?.totalAmount)}
-          icon={ChartLine}
-          loading={isInitialLoading}
-        />
+        <StatCard label="累计用电" value={`${fmtKwh(stats.totalConsumed)} 度`} icon={Gauge} />
+        <StatCard label="累计费用" value={fmtMoney(stats.totalAmount)} icon={ChartLine} />
       </div>
-
-      {errors.settings ? (
-        <p className="text-xs text-amber-600 dark:text-amber-400">
-          设置读取失败，电费按默认单价 {fmtMoney(0.56)}/度 估算。
-        </p>
-      ) : null}
 
       <Card>
         <CardHeader>
@@ -98,9 +68,7 @@ export default function DashboardPage() {
           <p className="text-xs text-muted-foreground">最近 6 个月的日均用电量</p>
         </CardHeader>
         <CardContent>
-          {isInitialLoading ? (
-            <div className="h-[280px] w-full animate-pulse rounded-md bg-muted" />
-          ) : readings.length === 0 ? (
+          {readings.length === 0 ? (
             <EmptyState
               icon={Gauge}
               title="还没有读数记录"

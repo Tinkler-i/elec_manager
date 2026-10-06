@@ -1,52 +1,40 @@
-"use client";
-
 import { ChartLine } from "lucide-react";
 
+import { AutoRefresh } from "@/components/auto-refresh";
 import { AnnualAnalysisChart } from "@/components/charts/annual-analysis-chart";
 import { DailyUsageChart } from "@/components/charts/daily-usage-chart";
 import { MonthlyComparisonChart } from "@/components/charts/monthly-comparison-chart";
 import { EmptyState } from "@/components/layout/empty-state";
-import { LoadError } from "@/components/layout/load-error";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { readingsApi, settingsApi } from "@/lib/api";
-import { useAsyncAll } from "@/lib/use-async-data";
-import { useHeartbeat } from "@/lib/use-heartbeat";
+import { getRatePerKwh, getReadings } from "@/lib/db";
 
+/**
+ * 读数据库的页面必须显式声明动态渲染，否则读数会在 build 时被烤进 HTML。
+ * 原因见 docs/coding-standards.md 与 src/app/page.tsx 的同一段注释。
+ */
+export const dynamic = "force-dynamic";
+
+/** 分析图不用刷得那么勤；标签页隐藏时跳过、切回来立即刷一次（见 use-heartbeat） */
 const REFRESH_MS = 60_000;
 
 /**
  * 数据分析。
  *
- * 三张图共用同一份读数与单价：原来三个图表组件各自 fetch 一遍 `/api/readings`
- * 和 `/api/settings`，进这一页要打 6 个请求，其中 4 个是重复的。
+ * 三张图共用同一份读数与单价，单价由服务端取好、按 props 传下去（图表里不再
+ * 自己取数，也不会因为拿不到设置而退回默认值）。
  */
 export default function AnalyticsPage() {
-  const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll({
-    readings: readingsApi.list,
-    settings: settingsApi.get,
-  });
-
-  useHeartbeat(() => void reload(), REFRESH_MS);
-
-  if (isInitialFailed) {
-    return (
-      <>
-        <PageHeader title="数据分析" description="用电趋势与对比" />
-        <LoadError className="py-24" error={errors.readings} onRetry={reload} />
-      </>
-    );
-  }
-
-  const readings = values.readings ?? [];
-  const rate = Number(values.settings?.rate_per_kwh ?? 0.56);
-  const empty = !isInitialLoading && readings.length === 0;
+  const readings = getReadings();
+  const rate = getRatePerKwh();
 
   return (
     <div className="space-y-5">
+      <AutoRefresh intervalMs={REFRESH_MS} />
+
       <PageHeader title="数据分析" description="日均用电、月度对比与年度趋势" />
 
-      {empty ? (
+      {readings.length === 0 ? (
         <Card>
           <CardContent>
             <EmptyState
@@ -58,7 +46,7 @@ export default function AnalyticsPage() {
         </Card>
       ) : (
         <>
-          <DailyUsageChart readings={readings} rate={rate} loading={isInitialLoading} />
+          <DailyUsageChart readings={readings} rate={rate} />
 
           <Card>
             <CardHeader>
@@ -66,11 +54,7 @@ export default function AnalyticsPage() {
               <p className="text-xs text-muted-foreground">最近 6 个月，悬浮查看电费</p>
             </CardHeader>
             <CardContent>
-              {isInitialLoading ? (
-                <div className="h-[320px] w-full animate-pulse rounded-md bg-muted" />
-              ) : (
-                <MonthlyComparisonChart readings={readings} rate={rate} />
-              )}
+              <MonthlyComparisonChart readings={readings} rate={rate} />
             </CardContent>
           </Card>
 
@@ -82,11 +66,7 @@ export default function AnalyticsPage() {
               </p>
             </CardHeader>
             <CardContent>
-              {isInitialLoading ? (
-                <div className="h-[360px] w-full animate-pulse rounded-md bg-muted" />
-              ) : (
-                <AnnualAnalysisChart readings={readings} rate={rate} />
-              )}
+              <AnnualAnalysisChart readings={readings} rate={rate} />
             </CardContent>
           </Card>
         </>
