@@ -44,7 +44,7 @@ jobs:
       # 这一层。先生成出来，类型检查才覆盖到生成的路由类型。
       # 见 node_modules/next/dist/docs/01-app/03-api-reference/06-cli/next.md。
       - name: 生成 Next 类型声明
-        run: npx next typegen
+        run: ./node_modules/.bin/next typegen
 
       - name: 类型检查
         run: ./node_modules/.bin/tsc --noEmit
