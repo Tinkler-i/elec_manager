@@ -79,6 +79,12 @@ jobs:
       - name: Build Next.js
         run: npm run build
 
+      # A5 冷启动回归：这是发版流程里唯一会真正把服务起起来的一步，其余步骤都是静态检查。
+      # 它验的正是 fpk 里那份 standalone —— 设备上 cmd/main 也是拿 node 跑这个 server.js。
+      # 两个矩阵 leg 并行，多出来的墙上时间大约是一次测试的量，不是两倍。
+      - name: 冷启动回归（A5）
+        run: node scripts/test-cold-start.mjs
+
       - name: Prepare fnOS package
         run: |
           PACKAGE_DIR="fnos/App.Native.ElecMeter"
