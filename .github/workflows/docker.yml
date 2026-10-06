@@ -1,0 +1,224 @@
+name: Docker 镜像
+
+# 只在「发布新版本」（v* tag）与手动触发时构建推送，刻意不加定时任务：
+# 上游没发版就不该重复构建。
+# PR 改了构建相关文件时只构建 + 冒烟，不推送 —— 用来在合并前拦住「编得出来但跑不起来」的镜像。
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'docker-compose.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.ts'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_IMAGE: node:22-alpine
+  NPM_REGISTRY: https://registry.npmjs.org
+
+jobs:
+  meta:
+    name: 计算镜像名与标签
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tags: ${{ steps.meta.outputs.tags }}
+    steps:
+      - id: meta
+        run: |
+          set -euo pipefail
+          # GHCR 的仓库名必须全小写，而 GitHub 用户名带大小写，这里统一转小写。
+          # 镜像名沿用项目里既有的 elec-meter（fpk 产物、容器名都是它）。
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/elec-meter"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            TAGS="${IMAGE}:${VERSION} ${IMAGE}:${VERSION%.*} ${IMAGE}:latest"
+          else
+            TAGS="${IMAGE}:sha-${GITHUB_SHA::7}"
+          fi
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "镜像: ${IMAGE}"
+          echo "标签: ${TAGS}"
+
+  smoke:
+    name: 构建 amd64 并冒烟（登录接口）
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建 amd64 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: elec-meter:smoke
+          cache-from: type=gha,scope=amd64
+          cache-to: type=gha,mode=max,scope=amd64
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
+
+      - name: 启动容器并验证登录
+        run: |
+          set -euo pipefail
+          docker run -d --name elec-smoke \
+            -p 16543:16543 \
+            -e JWT_SECRET=ci-smoke-secret \
+            -e TZ=Asia/Shanghai \
+            elec-meter:smoke
+
+          code=""
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:16543/api/auth/check || true)"
+            if [ "${code}" = "401" ]; then
+              echo "第 ${i} 次探测就绪（未登录返回 401）"
+              break
+            fi
+            sleep 2
+          done
+          if [ "${code}" != "401" ]; then
+            echo "::error::服务 60 秒内没就绪，最后状态码：${code}"
+            exit 1
+          fi
+
+          # 登录会经 better-sqlite3 读 auth_password 再做 bcrypt 比对。
+          # 这一步过了，才说明镜像里的原生模块在目标 libc/ABI 下真的能加载 ——
+          # 飞牛那边就是栽在 ABI 不匹配上，表现是页面能开、登录 500。
+          curl -sf -X POST http://127.0.0.1:16543/api/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"password":"admin"}' -o /tmp/login.json
+          cat /tmp/login.json
+          grep -q '"success":true' /tmp/login.json
+
+          # 数据库要落在 /app/data（compose 挂卷的位置），不能写在镜像可写层
+          docker exec elec-smoke test -f /app/data/elec.db
+          docker exec elec-smoke ls -l /app/data
+
+      - name: 容器日志
+        if: always()
+        run: docker logs elec-smoke 2>&1 | tail -50 || true
+
+      - name: 清理
+        if: always()
+        run: docker rm -f elec-smoke || true
+
+  build:
+    name: 构建并推送 ${{ matrix.arch }}
+    needs: [meta, smoke]
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      # 一个架构挂掉不连累另一个，否则连健康的 digest 都拿不到
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+          # 用原生 arm64 runner，不用 QEMU：better-sqlite3 要在构建阶段编原生模块，
+          # 模拟出来的 arm64 编译会慢到离谱。
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送（按 digest，暂不打标签）
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          outputs: type=image,push-by-digest=true,name-canonical=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
+
+      - name: 记录 digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: 上传 digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: 合并多架构 manifest
+    needs: [meta, build]
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载所有 digest
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 创建多架构标签
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ${{ needs.meta.outputs.image }}
+          TAGS: ${{ needs.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          TAG_ARGS=""
+          for t in ${TAGS}; do TAG_ARGS="${TAG_ARGS} -t ${t}"; done
+          # shellcheck disable=SC2086
+          docker buildx imagetools create ${TAG_ARGS} \
+            $(printf "${IMAGE}@sha256:%s " *)
+          FIRST_TAG="${TAGS%% *}"
+          docker buildx imagetools inspect "${FIRST_TAG}"

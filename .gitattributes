@@ -1,0 +1,31 @@
+# 换行统一成 LF。
+#
+# 这个仓库在 Windows 上开发，但 shell 脚本、Dockerfile、workflow 都在 Linux 容器/CI 里执行。
+# 一旦被编辑器存成 CRLF，`#!/bin/bash\r` 会让容器里的脚本直接报
+# "bad interpreter: No such file or directory"，而且很难一眼看出来。
+
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.md text eol=lf
+
+# 二进制资源不做换行转换
+*.png binary
+*.PNG binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.zip binary
+*.fpk binary
+*.node binary
+*.db binary
+*.sqlite binary
