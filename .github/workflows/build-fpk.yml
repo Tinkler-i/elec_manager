@@ -106,6 +106,9 @@ jobs:
 
           cp -r public "${SERVER_DIR}/public"
 
+          # 与 fnos/build.sh 保持一致：先删再从零建，别指望「全新检出恰好没有 data/」。
+          # Turbopack 会把开发机上的 data/ trace 进 .next/standalone，CI 只是碰巧干净。
+          rm -rf "${SERVER_DIR}/data"
           mkdir -p "${SERVER_DIR}/data"
 
       - name: Clean unnecessary files
