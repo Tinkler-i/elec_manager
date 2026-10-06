@@ -4,7 +4,13 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { Reading, Setting, Stats } from '../types';
 
-const DB_PATH = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
+// 这几处的 /*turbopackIgnore: true*/ 不是装饰。Turbopack 对解析不出的路径会退化成
+// 「按模式匹配」，把仓库里匹配上的文件全 trace 进 .next/standalone —— 实测开发机上只要
+// 存在 fnos/App.Native.ElecMeter/app/server/（上一次打包的产物），它就会被 trace 进去，
+// 于是 fnos/build.sh 第二轮把上一轮的产物嵌进新包。所有路径定义与 fs 调用都要带上这个注释。
+// 详见 backupDatabase() 上面那段说明。
+// export：src/lib/auth.ts 要用它，别再自己拼一遍默认路径（task-26 的收敛项）。
+export const DB_PATH = process.env.ELEC_DB_PATH || path.join(/*turbopackIgnore: true*/ process.cwd(), 'data', 'elec.db');
 
 /**
  * 数据目录：默认跟数据库放在一起。
@@ -16,10 +22,10 @@ const DB_PATH = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'el
  *
  * Docker 下 ELEC_DB_PATH 未设置，退回 `cwd/data`，正好是 docker-compose 挂的卷。
  */
-export const DATA_DIR = process.env.ELEC_DATA_DIR || path.dirname(DB_PATH);
+export const DATA_DIR = process.env.ELEC_DATA_DIR || path.dirname(/*turbopackIgnore: true*/ DB_PATH);
 
-/** 备份目录，可用 ELEC_BACKUP_DIR 覆盖（飞牛包显式指向 TRIM_PKGVAR/backups） */
-export const BACKUP_DIR = process.env.ELEC_BACKUP_DIR || path.join(DATA_DIR, 'backups');
+/** 备份目录，可用 `ELEC_BACKUP_DIR` 覆盖（飞牛包显式指向 `TRIM_PKGVAR/backups`） */
+export const BACKUP_DIR = process.env.ELEC_BACKUP_DIR || path.join(/*turbopackIgnore: true*/ DATA_DIR, 'backups');
 
 let db: Database.Database | null = null;
 let cachedRate: number | null = null;
