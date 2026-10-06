@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { changePassword } from '@/lib/auth';
+import { readJson } from '@/lib/read-json';
 
 export async function PUT(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { password } = body;
+    // 最敏感的一处：body 里就是新密码。解析失败必须挡在日志之外（见 src/lib/read-json.ts）
+    const parsed = await readJson<{ password?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const { password } = parsed.body;
 
     if (!password || typeof password !== 'string') {
       return NextResponse.json({ error: '请输入有效密码' }, { status: 400 });

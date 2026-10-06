@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteReadings } from '@/lib/db';
+import { readJson } from '@/lib/read-json';
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { ids } = body;
+    const parsed = await readJson<{ ids?: unknown }>(request);
+    if (!parsed.ok) return parsed.response;
+    const { ids } = parsed.body;
 
     if (!Array.isArray(ids) || ids.length === 0) {
       return NextResponse.json({ error: '请提供要删除的读数 ID 列表' }, { status: 400 });

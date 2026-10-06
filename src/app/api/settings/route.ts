@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAllSettings, invalidateSettingsCache, setSetting } from '@/lib/db';
 import { toPublicSettings } from '@/lib/settings-keys';
+import { readJson } from '@/lib/read-json';
 
 // 允许通过 Settings API 修改的 key 白名单
 const ALLOWED_KEYS = new Set(['rate_per_kwh', 'initial_reading']);
@@ -17,7 +18,9 @@ export async function GET() {
 
 export async function PUT(request: NextRequest) {
   try {
-    const body = await request.json();
+    const parsed = await readJson(request);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.body;
 
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
       return NextResponse.json({ error: '请求格式不正确' }, { status: 400 });

@@ -62,7 +62,38 @@
 **运行时证据**：把 `ELEC_BACKUP_DIR` 指向一个普通文件触发备份失败路径 —— 补日志前客户端拿到 500 而服务端**零输出**；补上之后同一条路径输出
 `创建备份失败: SqliteError: unable to open database file ... code: 'SQLITE_CANTOPEN'`。
 
-**门禁覆盖到哪（2026-10 更新过）**：`eslint.config.mjs` 里有 `no-restricted-syntax` 规则，覆盖**两个「错误只回给调用方、服务端零痕迹」的出口**：
+**日志里不得出现请求体、凭据或文件内容**（2026-10 真实凭据泄漏事故）：
+
+`await request.json()` 解析失败抛的 `SyntaxError`，**V8 会把原始输入的约 11 个字符窗口拼进 message**。路由的 catch 一记日志，请求体片段就进了服务端日志。实测（standalone 构建 + 真实 HTTP）：
+
+```
+登录失败: SyntaxError: Unexpected token 'S', ..."assword": SuperSecre"... is not valid JSON
+登录失败: SyntaxError: Unexpected token 'S', "ShortQA1" is not valid JSON
+```
+
+- 长值泄漏**前缀**：`SuperSecretQA12345` → `SuperSecre`
+- **短值（≤11 字符）整体泄漏**：`ShortQA1` → 完整进日志
+- 只有**结构错误**（例如值没加引号）才触发；合法 JSON 不泄漏
+
+**修法**：解析统一走 `src/lib/read-json.ts` 的 `readJson(request)`，失败返回 **400「请求体不是合法 JSON」**，日志只写固定文案。6 处：`auth/login`、`auth/password`、`readings`、`readings/[id]`、`readings/batch-delete`、`settings`。修后重放同样的请求，日志里 `SuperSecre` / `ShortQA1` **0 命中**。
+
+**其它 catch 的日志成分**（构造失败后读真实日志得到的，不是读代码推断的）：
+
+| 日志 | 里面有什么 | 有客户端输入吗 |
+|---|---|---|
+| `请求体不是合法 JSON（按 400 处理；内容不入日志）` | 固定文案 | 无 |
+| `创建备份失败: SqliteError: unable to open database file` | sqlite 错误码 | 无 |
+| `获取备份列表失败: Error: ENOTDIR ... scandir '<BACKUP_DIR>'` | 服务端配置的目录路径 | 无 |
+| `MCP 工具 backup_database 失败: SqliteError: ...` | 工具名 + 错误码 | 无 |
+| `删除备份失败: Error: EPERM ... unlink '<BACKUP_DIR>\<客户端传的文件名>'` | 路径里含 `path.basename(file)` | **有，见下** |
+
+better-sqlite3 的异常**不带 SQL 参数**（实测 `UNIQUE constraint failed: t.id`、`NOT NULL constraint failed: t.notes`、`no such table: missing` 都只有表/列名；只有把值拼进 SQL 文本才会回显，而本仓库的 SQL 全是 `?` 占位符）。
+
+**已知残余（如实记录，不当成已解决）**：`DELETE /api/backup?file=` 和 `GET /api/backup?file=` 走 fs，失败时错误消息的路径含 `path.basename(客户端传的文件名)`。它被限制在单段路径内、不含内容，与访问日志里的 URL 同级，按**可接受残余**处理；要做到「日志里零客户端输入」，把这两处 catch 改成只记错误码。
+
+**这一条没有 lint 兜底**：`no-restricted-syntax` 只看「catch 块里有没有 `console.*` 调用」，**看不出参数里是不是带用户输入** —— `console.error('x:', error)` 照样过。只能靠评审和这条规范。
+
+**门禁覆盖到哪（2026-10 更新过）**：`eslint.config.mjs` 里有 `no-restricted-syntax` 规则，覆盖**两个「错误只回给调用方、服务端零痕迹」的出口**，范围内共 **26 处 catch**（`src/app/api` 17 + `src/lib/mcp-server.ts` 9），全部有日志：
 
 | 覆盖 | 为什么是这两处 |
 |---|---|
@@ -72,6 +103,12 @@
 **反向验证**（两处都做过）：删掉 `src/app/api/stats/route.ts` 或 `src/lib/mcp-server.ts` 里任一处 `console.error` → `npm run lint` exit 1，报 `no-restricted-syntax`。
 
 规则上线时抓出**第 17 处**：`src/app/api/update/route.ts` 的 `catch (e)` —— 它用了 `e`（拼错误文案），所以当初的 `no-unused-vars` 没报它，但它同样没留痕，已补 `console.error`。**告警只能发现「变量没用」，发现不了「该记没记」**，这就是要单独立规则的原因。
+
+**规则的一个已知误报**：`catch (e) { throw e; }`（**重抛、块里没有 `console.*`**）也会被判红。语义上这是误报 —— 重抛没有吞掉异常，错误会往上传播。
+
+**不放宽 selector**：放宽到允许 `ThrowStatement`，会同时放过 `catch { throw new Error('generic') }`（把原始错误丢掉的那类），而 selector 分不出这两者。宁可偶尔误报一次让人看一眼，也不要开一条分不出来的口子。
+
+**遇到时不要用注释禁用**：确认是「保留原始错误的重抛」就在评审里放行；如果是「转译后重抛」（如 `src/lib/api.ts` 把网络错误转成 `ApiError`，见下面「不覆盖的地方」），说明为什么。当前 `src/app/api/**` 与 `src/lib/mcp-server.ts` 里**没有**这种写法（基线干净），所以是**潜在**误报、不是现行问题。
 
 **不覆盖的地方 —— 不是漏了，是这些「静默」有意为之**（一刀切只会逼出注释禁用，等于把门关掉）：
 
