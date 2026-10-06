@@ -35,9 +35,12 @@ fi
 echo "Node.js 版本: $(node -v)"
 
 # 安装依赖
+# 用 npm ci 而不是 npm install：ci 会校验 package-lock.json 与 package.json 是否一致，
+# 且不会顺手改锁文件。锁文件要用 npm 10 维护 —— npm 11 跑 install 会把
+# @emnapi/core、@emnapi/runtime 两条删掉，之后 npm ci 就会 EUSAGE 失败。
 echo "安装项目依赖..."
 cd "${APP_DIR}/.."
-npm install
+npm ci
 
 # 构建 Next.js 项目
 echo "构建 Next.js 项目..."
