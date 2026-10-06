@@ -23,11 +23,19 @@ export function ensureJwtSecret(): string {
   }
 
   // 2. 密钥文件路径：与数据库同目录。路径来源只有 db.ts 一处，别在这里重写表达式
-  const secretFile = path.join(path.dirname(DB_PATH), 'jwt_secret');
+  //
+  // ⚠️ 下面几处 /*turbopackIgnore: true*/ 必须是**实参位置**（紧贴被忽略的那个参数）。
+  // 位置很讲究，写错等于没写 —— task-31/32 为此白跑了一轮：
+  //   ✓ path.join(/*turbopackIgnore: true*/ path.dirname(DB_PATH), 'jwt_secret')
+  //   ✗ const x = /*turbopackIgnore: true*/ path.join(...)                语句位置，Turbopack 不看
+  //   ✗ path.join(path.dirname(/*turbopackIgnore: true*/ DB_PATH), ...)  注释贴错了实参
+  // 不加的后果：开发机上存在 data/jwt_secret 时它会被 trace 进 .next/standalone，
+  // 而 Dockerfile / fnos 打包都直接消费 standalone —— 私钥就跟着发出去了。
+  const secretFile = path.join(/*turbopackIgnore: true*/ path.dirname(DB_PATH), 'jwt_secret');
 
   try {
-    if (fs.existsSync(secretFile)) {
-      const stored = fs.readFileSync(secretFile, 'utf-8').trim();
+    if (fs.existsSync(/*turbopackIgnore: true*/ secretFile)) {
+      const stored = fs.readFileSync(/*turbopackIgnore: true*/ secretFile, 'utf-8').trim();
       if (stored) {
         process.env.JWT_SECRET = stored;
         return stored;
@@ -42,9 +50,9 @@ export function ensureJwtSecret(): string {
   try {
     const dir = path.dirname(secretFile);
     if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true });
     }
-    fs.writeFileSync(secretFile, generated, { mode: 0o600 });
+    fs.writeFileSync(/*turbopackIgnore: true*/ secretFile, generated, { mode: 0o600 });
   } catch {
     console.warn('无法持久化 JWT_SECRET，重启后 token 将失效。请设置 JWT_SECRET 环境变量。');
   }

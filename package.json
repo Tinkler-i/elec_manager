@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "postbuild": "node scripts/lib/check-standalone-clean.mjs",
     "start": "next start",
     "lint": "eslint",
     "test": "node --experimental-strip-types scripts/test-calculations.ts",
