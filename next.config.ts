@@ -12,21 +12,32 @@ const nextConfig: NextConfig = {
   },
   serverExternalPackages: ["better-sqlite3", "@modelcontextprotocol/sdk"],
 
-  // ⚠️ 不要用 outputFileTracingExcludes 去解决「开发机上的 data/ 被 trace 进 standalone」。
+  // ⚠️ 打包踩坑记录：开发机上的 data/ 被 trace 进 .next/standalone
   //
-  // 这个选项确实存在（next/dist/server/config-schema.js 的 schema 里有），但在
-  // Next 16 + Turbopack 下够不着那类条目：排除逻辑在 next/dist/build/collect-build-traces.js
-  // （约 441-533 行），遍历的是 chunksTrace.entryNameFilesMap 里的**路由**，逐个改写
-  // server/<route>.js.nft.json；而 data/elec.db 那条只出现在
-  // server/instrumentation.js.nft.json —— instrumentation 不在那个 map 里，结构上排除不到。
+  // 结论：这个坑由 src/lib/db.ts 路径定义处的 /*turbopackIgnore: true*/ 解决（task-27），
+  // 打包侧再由 fnos/build.sh 兜一道。**不要用 outputFileTracingExcludes 兜这个底。**
+  // 下面两条都是实测出来的，不是读文档得来的 —— 只读源码会把你带反。
   //
-  // task-27 实测过 7 种键/glob 组合（"*"、"**"、"/api/stats"、"instrumentation" 配
-  // ./data/**、**/data/**、**/*.db、**/*.js），没有一种能把 data/elec.db 移出去。
-  // 对照组：键 "/api/stats" + "**/*.js" 能把该路由的 nft 从 6 条减到 3 条 ——
-  // 说明选项本身是工作的，只是覆盖不到 instrumentation。**别再试这条路了。**
+  // ① 只读 JS 源码会得出「这个选项在 Turbopack 下是死的」这个错误结论。
+  //    三个应用点确实全被 webpack 门挡着：
+  //      build/index.js:1542                 bundler !== Turbopack 才 collectBuildTraces
+  //      build/adapter/build-complete.js:172  同样门
+  //      build/turbopack-build/impl.js:241    buildTraceContext: undefined
+  //    → collect-build-traces.js:441 拿到空 Map，:480-525 那段循环根本不跑。
+  //    但 Turbopack 是在**原生侧**自己实现这个选项的：@next/swc-*.node（130MB 那个）里
+  //    能直接搜到 outputFileTracingExcludes。所以选项是生效的，只是不在 JS 里。
   //
-  // 正解在别处：src/lib/db.ts 路径定义处的 /*turbopackIgnore: true*/，
-  // 以及 fnos/build.sh 复制完 standalone 之后清掉 app/server/data。
+  // ② 实测（Next 16.2.9，构建头显示 Turbopack，每次各自删 .next 重建），看 api/stats 的 nft：
+  //      { "/api/stats": ["**/*.js"] }    → 116 条 → 1 条
+  //      { "/api/stats": ["**/*.zzz"] }   → 116 条不变（键匹配、glob 匹配不到）
+  //      { "/nonexistent": ["**/*.js"] }  → 116 条不变（glob 有效、键匹配不到）
+  //    两个阴性对照说明变化确实来自这个选项，不是构建抖动。
+  //
+  // 那为什么还是别用它：db.ts 那条 trace 落在 server/instrumentation.js.nft.json 里。
+  // task-27 在当时的代码上试过 "*"、"**"、"/api/stats"、"instrumentation"、"/instrumentation"
+  // 配 ./data/**、**/data/**、**/*.db 等组合，一条都没能把它移掉（该条目在 db.ts 修好后
+  // 已不再出现，没法在当前代码上重验）。有效的是 /*turbopackIgnore: true*/ —— 加完之后
+  // 连脏树重建，standalone 顶层都只剩 .next / node_modules / package.json / server.js。
   env: {
     // 构建期注入版本号。运行时如果飞牛注入了 TRIM_APPVER，以那个为准
     // （它取自 manifest.version，是应用中心里显示的版本）。见 lib/version.ts。
