@@ -26,20 +26,28 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-require-imports": "off",
     },
   },
-  // 「静默 catch」门禁：API 路由里的 catch 必须留痕（见 docs/coding-standards.md
-  // 「catch 必须留痕」）。2026-10 实测过一次：规范里早写着「不要吞异常」，
-  // src/app/api 下 17 处 catch 照样全吞了 —— 规则不进门禁就等于不会响。
+  // 「静默 catch」门禁：catch 必须留痕（见 docs/coding-standards.md「catch 必须留痕」）。
+  // 2026-10 实测过两次：① 规范里早写着「不要吞异常」，src/app/api 下 17 处 catch 照样全吞；
+  // ② 立了规则之后，规则自己找出第 17 处（`catch (e)` 用了 e，所以 no-unused-vars 从来没报过它）。
+  // 规则不进门禁就等于不会响。
   //
-  // 为什么**只**覆盖 src/app/api/**：这一层的契约是「异常 → 500 + 服务端日志」，
-  // 留痕是硬要求。其它层的 catch 有各自的合法形态，一刀切只会逼出注释禁用（等于把门关掉）：
+  // 覆盖范围 = 两处「错误只回给调用方、服务端零痕迹」的出口：
+  //   · src/app/api/**        —— HTTP 层：异常 → 500 + 服务端日志；
+  //   · src/lib/mcp-server.ts —— MCP 工具：异常 → errorResult 回给客户端（一个 AI agent）。
+  //     这层比 HTTP 更隐蔽：浏览器至少有个 500 让人看见，而 agent 收到 isError 之后可能
+  //     静默重试 / 换参数 / 直接放弃，运维完全不知道发生过。
+  //
+  // 有意**不**覆盖的地方 —— 不是漏了，是这些「静默」都有意为之，一刀切只会逼出注释禁用
+  // （等于把门关掉）。下一个人若想扩范围，请先读这一段的理由：
+  //   · scripts/** —— 测试脚本里清理临时目录、解析 SSE 的 `catch {}`：清理失败本来就该静默，
+  //     报出来反而会掩盖真正的测试结果。**别顺手加进来。**
   //   · src/proxy.ts —— token 校验失败是**预期控制流**（401 / 跳登录页），不是异常；
   //   · src/lib/api.ts —— 网络失败是**转译成 ApiError 后重抛**，调用方会看到；
   //   · src/lib/auth.ts —— 读不到 jwt_secret 文件就**继续生成**，刻意忽略；
-  //   · 客户端组件 —— 用 toast 告知用户，不需要服务端日志；
-  //   · src/lib/mcp-server.ts —— 把错误作为工具结果回给 MCP 调用方。
-  // 这些「静默」都是有意的，规则不覆盖它们；覆盖范围写进规范，别读成「全局都管」。
+  //   · 客户端组件（src/components/**、页面）—— 用 toast 告知用户，不需要服务端日志。
+  // 覆盖范围同步写在规范里，别读成「全局都管」。
   {
-    files: ["src/app/api/**/*.ts"],
+    files: ["src/app/api/**/*.ts", "src/lib/mcp-server.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",

@@ -62,13 +62,28 @@
 **运行时证据**：把 `ELEC_BACKUP_DIR` 指向一个普通文件触发备份失败路径 —— 补日志前客户端拿到 500 而服务端**零输出**；补上之后同一条路径输出
 `创建备份失败: SqliteError: unable to open database file ... code: 'SQLITE_CANTOPEN'`。
 
-**边界（别读成「已被门禁覆盖」，2026-10 更新过）**：`eslint.config.mjs` 里有 `no-restricted-syntax` 规则，**只覆盖 `src/app/api/**/*.ts`** —— 这一层的契约是「异常 → 500 + 服务端日志」，留痕是硬要求。**反向验证**：删掉 `src/app/api/stats/route.ts` 的 `console.error` 后，`npm run lint` exit 1，报 `no-restricted-syntax`。
+**门禁覆盖到哪（2026-10 更新过）**：`eslint.config.mjs` 里有 `no-restricted-syntax` 规则，覆盖**两个「错误只回给调用方、服务端零痕迹」的出口**：
 
-规则上线时又抓出**第 17 处**：`src/app/api/update/route.ts` 的 `catch (e)` —— 它用了 `e`（拼错误文案），所以当初的 `no-unused-vars` 没报它，但它同样没留痕，已补 `console.error`。**告警只能发现「变量没用」，发现不了「该记没记」**，这就是要单独立规则的原因。
+| 覆盖 | 为什么是这两处 |
+|---|---|
+| `src/app/api/**/*.ts` | HTTP 层：异常 → 500 + 服务端日志 |
+| `src/lib/mcp-server.ts` | MCP 工具：异常 → `errorResult` 回给客户端（一个 AI agent）。**比 HTTP 更隐蔽** —— 浏览器至少有个 500 让人看见，而 agent 收到 `isError` 之后可能静默重试 / 换参数 / 直接放弃，运维完全不知道发生过 |
 
-它拦不住 / 有意不覆盖：
-- **其它层的 `catch`**（`src/proxy.ts`、`src/lib/**`、`src/components/**`、页面）。那些地方有各自的合法形态，一刀切只会逼出注释禁用（等于把门关掉），所以规则按范围排除：预期控制流（token 无效 → 401 / 跳登录）、转译后重抛（`src/lib/api.ts`）、刻意忽略并继续（`src/lib/auth.ts` 读不到 `jwt_secret` 就生成新的）、客户端 toast、MCP 把错误作为工具结果回传。这些仍靠评审。
-- **日志内容有没有意义** —— 规则只看「块内有没有调用 `console.*`」，`console.error('x')` 不带异常对象也能过。
+**反向验证**（两处都做过）：删掉 `src/app/api/stats/route.ts` 或 `src/lib/mcp-server.ts` 里任一处 `console.error` → `npm run lint` exit 1，报 `no-restricted-syntax`。
+
+规则上线时抓出**第 17 处**：`src/app/api/update/route.ts` 的 `catch (e)` —— 它用了 `e`（拼错误文案），所以当初的 `no-unused-vars` 没报它，但它同样没留痕，已补 `console.error`。**告警只能发现「变量没用」，发现不了「该记没记」**，这就是要单独立规则的原因。
+
+**不覆盖的地方 —— 不是漏了，是这些「静默」有意为之**（一刀切只会逼出注释禁用，等于把门关掉）：
+
+- `scripts/**` —— 测试脚本里清理临时目录、解析 SSE 的 `catch {}`：清理失败本来就该静默，报出来反而会掩盖真正的测试结果。`eslint.config.mjs` 里也写了这条理由。
+- `src/proxy.ts` —— token 校验失败是**预期控制流**（401 / 跳登录页），不是异常。
+- `src/lib/api.ts` —— 网络失败是**转译成 `ApiError` 后重抛**，调用方会看到。
+- `src/lib/auth.ts` —— 读不到 `jwt_secret` 文件就**继续生成**，刻意忽略并继续。
+- 客户端组件（`src/components/**`、页面）—— 用 toast 告知用户，不需要服务端日志。
+
+**规则本身拦不住的**：
+
+- **日志内容有没有意义** —— 它只看「块内有没有调用 `console.*`」，`console.error('x')` 不带异常对象也能过。
 - **换成别的 logger** —— 规则认的是 `console`，换 logger 要同步改规则。
 
 本节原来写的是「这条规则没有 lint 规则兜底」，加了规则之后那句已经不成立，已改成本段。

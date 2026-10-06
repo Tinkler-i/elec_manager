@@ -76,6 +76,7 @@ export function createMcpServer(): McpServer {
       });
       return jsonResult(newReading);
     } catch (e) {
+      console.error('MCP 工具 add_reading 失败:', e);
       return errorResult(e instanceof Error ? e.message : '添加读数失败');
     }
   });
@@ -89,6 +90,7 @@ export function createMcpServer(): McpServer {
         limit: args.limit,
       }));
     } catch (e) {
+      console.error('MCP 工具 list_readings 失败:', e);
       return errorResult(e instanceof Error ? e.message : '查询读数失败');
     }
   });
@@ -98,6 +100,7 @@ export function createMcpServer(): McpServer {
     try {
       return jsonResult(getStats());
     } catch (e) {
+      console.error('MCP 工具 get_stats 失败:', e);
       return errorResult(e instanceof Error ? e.message : '获取统计失败');
     }
   });
@@ -115,6 +118,7 @@ export function createMcpServer(): McpServer {
       const data = getReadings();
       return jsonResult({ count: data.length, data });
     } catch (e) {
+      console.error('MCP 工具 export_readings 失败:', e);
       return errorResult(e instanceof Error ? e.message : '导出数据失败');
     }
   });
@@ -126,6 +130,7 @@ export function createMcpServer(): McpServer {
       const fileName = await backupDatabase();
       return jsonResult({ message: '备份成功', fileName });
     } catch (e) {
+      console.error('MCP 工具 backup_database 失败:', e);
       return errorResult(e instanceof Error ? e.message : '备份失败');
     }
   });
@@ -139,6 +144,7 @@ export function createMcpServer(): McpServer {
       }
       return jsonResult(reading);
     } catch (e) {
+      console.error('MCP 工具 get_reading 失败:', e);
       return errorResult(e instanceof Error ? e.message : '获取读数失败');
     }
   });
@@ -184,6 +190,7 @@ export function createMcpServer(): McpServer {
       });
       return jsonResult(updatedReading);
     } catch (e) {
+      console.error('MCP 工具 update_reading 失败:', e);
       return errorResult(e instanceof Error ? e.message : '编辑读数失败');
     }
   });
@@ -199,6 +206,7 @@ export function createMcpServer(): McpServer {
 
       return jsonResult({ message: '读数已删除', id });
     } catch (e) {
+      console.error('MCP 工具 delete_reading 失败:', e);
       return errorResult(e instanceof Error ? e.message : '删除读数失败');
     }
   });
@@ -209,6 +217,7 @@ export function createMcpServer(): McpServer {
       // auth_password / mcp_key_* 不外发，名单见 src/lib/settings-keys.ts
       return jsonResult(toPublicSettings(getAllSettings()));
     } catch (e) {
+      console.error('MCP 工具 get_settings 失败:', e);
       return errorResult(e instanceof Error ? e.message : '获取设置失败');
     }
   });
