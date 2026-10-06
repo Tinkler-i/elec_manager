@@ -13,6 +13,13 @@
 - 路由级鉴权写在 `src/proxy.ts`，不要在每个页面里重复判断。
 - **Next 16 把 `middleware` 改名成了 `proxy`**，文件是 `src/proxy.ts`。写新代码前先看 `node_modules/next/dist/docs/` 里的对应文档，这个版本的 API 和记忆里的可能不一样。
 
+这一版还有几处和记忆里不一样，都已实测确认：
+
+- **`error.tsx` 的重试函数叫 `unstable_retry`，不是 `reset`。** `reset` 只清除错误状态、重渲染子树，**不会重新取数** —— 服务端那次失败会原样复现，「重试」等于坏的。要重新取数必须用 `unstable_retry`。
+- **`_` 前缀的目录不进路由。** 这是私有目录约定，`src/app/_foo/page.tsx` 在构建产物里根本不存在。调试用的临时路由别用下划线开头。
+- **服务端组件读数据库不会自动变成动态渲染。** 没有 `cookies()` / `headers()` / `searchParams` 这类动态 API 的页面默认静态预渲染，`better-sqlite3` 读出来的数据会在 **build 时被烤进 HTML**。读数据库的页面必须显式 `export const dynamic = 'force-dynamic'`，否则测试时看着正常、上线后数据不更新。
+- **错误态不在 SSR 的 HTML 里。** 服务端渲染抛错时浏览器先拿到 500 和 Next 的默认错误壳，水合之后才由 `error.tsx` 渲染出错误 UI。判断「错误态对不对」要看水合后的页面，不能只看 HTML。
+
 ## 样式
 
 - Tailwind v4，配置在 `postcss.config.mjs`，不再有 `tailwind.config.js`。
