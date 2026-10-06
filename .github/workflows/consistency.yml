@@ -1,0 +1,109 @@
+name: 一致性检查
+
+# 把几条容易「改了一边忘了另一边」的约定变成 CI 检查，不依赖谁记得去看文档。
+# 只挂在 pull_request 上，不碰 tag 触发的发版流程。
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: consistency-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    name: 一致性检查
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 收集本次改动
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" > /tmp/changed.txt
+          echo "改动文件："
+          cat /tmp/changed.txt
+
+      # 跨语言的约定没有编译器帮忙：fnos 生命周期脚本导出的环境变量，
+      # 应用代码里必须有人读。改名字只改一边，设备上就是「数据写错地方」。
+      - name: 环境变量一致性（fnOS 启动脚本 ↔ 应用代码）
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          grep -rhoE 'ELEC_[A-Z0-9_]+' fnos/App.Native.ElecMeter/cmd/ 2>/dev/null | sort -u > /tmp/shell-vars.txt || true
+          grep -rhoE 'process\.env\.ELEC_[A-Z0-9_]+' src/ 2>/dev/null | sed 's/process\.env\.//' | sort -u > /tmp/ts-vars.txt || true
+          echo "fnOS 生命周期脚本里出现的："; cat /tmp/shell-vars.txt
+          echo "src/ 里读取的："; cat /tmp/ts-vars.txt
+          # 只查单向：脚本设了但代码没人读 = 八成改漏了一边。
+          # 反过来（代码读的比脚本设的多）是正常的，那些是可选的覆盖项。
+          UNREAD="$(comm -23 /tmp/shell-vars.txt /tmp/ts-vars.txt)"
+          if [ -n "$UNREAD" ]; then
+            echo "::error::这些变量在 fnOS 生命周期脚本里设置了，但 src/ 里没有任何地方读它：$(echo $UNREAD | tr '\n' ' ')"
+            echo "::error::要么是改名只改了一边，要么是脚本里多导出了。"
+            exit 1
+          fi
+          echo "✅ 一致"
+
+      - name: 版本号守卫（只在发版时改）
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if ! grep -qE '^(package\.json|fnos/App\.Native\.ElecMeter/manifest)$' /tmp/changed.txt; then
+            echo "本次没动 package.json / manifest，跳过"
+            exit 0
+          fi
+          if git diff "origin/${{ github.base_ref }}...HEAD" -- package.json fnos/App.Native.ElecMeter/manifest \
+             | grep -qE '^[+-](\s*"version"|version=)'; then
+            echo "::error::这个 PR 改了版本号。版本号在发版时统一改，平时不动；"
+            echo "::error::发版由仓库所有者在 master 上打 tag 完成。"
+            exit 1
+          fi
+          echo "✅ 版本号没动"
+
+      - name: 依赖锁文件提示
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if grep -qE '^package-lock\.json$' /tmp/changed.txt; then
+            echo "::warning file=package-lock.json::锁文件被改了。冲突不要手工合并 —— 删掉重新 npm install 生成。手工补的条目在别的平台上会让 npm ci 直接 EUSAGE 失败。"
+          fi
+          echo "✅ 检查完毕"
+
+      - name: 判断改动范围
+        id: scope
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if grep -qE '^src/' /tmp/changed.txt && grep -qE '^(\.github/workflows/|fnos/build\.sh)' /tmp/changed.txt; then
+            echo "wide=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "wide=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 范围过宽时在 PR 上留言
+        if: steps.scope.outputs.wide == '1'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          MARK='<!-- consistency-check:wide-scope -->'
+          BODY="${MARK}
+          这个 PR 同时改了应用代码（\`src/**\`）和构建/打包配置（\`.github/workflows/**\`、\`fnos/build.sh\`）。
+
+          范围这么宽的 PR 不好 review，改动的影响面也容易被低估。建议拆开，或者在这里说明为什么必须一起改。"
+          if gh pr view "$PR" --json comments --jq '.comments[].body' | grep -qF "$MARK"; then
+            echo "已经有提醒了，不重复留言"
+          else
+            gh pr comment "$PR" --body "$BODY"
+          fi
