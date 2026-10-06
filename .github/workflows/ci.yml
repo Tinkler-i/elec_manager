@@ -35,8 +35,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # 这里直接调命令而不走 `npm run xxx`：package.json 按 AGENTS.md 归应用开发，
-      # 多平台这边不往里塞 script。
+      # typegen / tsc 直接调可执行文件：它们是工具链命令，不是项目语义的一部分。
+      # 测试走 `npm test`，入口只留一个，免得改了 package.json 而 CI 没跟上。
       #
       # next-env.d.ts 在 .gitignore 里，干净检出时不存在，而 tsconfig 的 include
       # 又引用了它 —— 先跑 typegen 把声明文件和路由类型生成出来，再 tsc。
@@ -51,7 +51,7 @@ jobs:
         run: npm run lint
 
       - name: 单元测试（图表与统计口径）
-        run: node --experimental-strip-types scripts/test-calculations.ts
+        run: npm test
 
       - name: 构建
         run: npm run build

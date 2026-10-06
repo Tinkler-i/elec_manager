@@ -10,11 +10,22 @@
 # Linux 上编，glibc 与 musl 也不通用。原来那份 Dockerfile 直接 COPY 宿主机
 # .next/standalone，属于「build 得出来但跑不起来」。
 #
-# 国内网络可以覆盖基础镜像与 npm 源（换的是同一套 alpine 镜像的镜像站，apk 才能照常跑）：
+# 基础镜像与 npm 源都可以覆盖。NODE_IMAGE 只能换成同一套 alpine 镜像的镜像站 ——
+# 换成 Debian 系的 node 镜像，下面的 apk add 会直接失败。
+#
+# 下面这个镜像站实测可用（2026-10-06，本机 Windows / 国内网络，走 Registry v2 API 核对：
+# index、arm64 子 manifest、4 个 layer blob 全部 200；与 1ms.run、1panel.live 两个镜像站
+# 返回的 index digest 完全相同 sha256:0a7108bf…e402，说明转发的是同一个上游镜像）。
+# 它是 Docker Hub 的第三方代理：镜像内容一致，但拉取要经过第三方。在意这点就别用代理，
+# 或者把 NODE_IMAGE 钉到 digest。你的网络未必和这次实测相同，换之前先 docker pull 确认一次。
+#
 #   docker build \
-#     --build-arg NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-alpine \
+#     --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:22-alpine \
 #     --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
 #     -t elec-meter .
+#
+# 这里原来推荐的是 registry.cn-hangzhou.aliyuncs.com/library/node:22-alpine，实测不通：
+# token 能签发，但 pull 返回 UNAUTHORIZED（code=UNAUTHORIZED, Name=library/node）。
 # ─────────────────────────────────────────────────────────────────────────────
 
 ARG NODE_IMAGE=node:22-alpine
