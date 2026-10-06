@@ -42,13 +42,19 @@ echo "安装项目依赖..."
 cd "${APP_DIR}/.."
 npm ci
 
+# 先清掉上一次的打包产物，再构建。
+# 顺序不能反：Turbopack 的 trace 会把「按模式匹配到的东西」收进 .next/standalone，
+# app/server 正好是上一次打包的产物。放在构建之后清，第二轮就会把第一轮的 app/server
+# 整个嵌进新包，包一轮比一轮大。
+echo "清理上一次的打包产物..."
+rm -rf "${SERVER_DIR}"
+
 # 构建 Next.js 项目
 echo "构建 Next.js 项目..."
 npm run build
 
-# 清理并创建 server 目录
+# 创建 server 目录
 echo "准备应用文件..."
-rm -rf "${SERVER_DIR}"
 mkdir -p "${SERVER_DIR}"
 
 # 复制 standalone 构建产物（包括隐藏目录如 .next）
@@ -63,6 +69,15 @@ cp -r public "${SERVER_DIR}/public"
 
 # 数据目录只作为占位。运行时数据库与备份都在 TRIM_PKGVAR（见 cmd/main），
 # 不会写到这里 —— 安装目录在升级时会被整体替换。
+#
+# 先删再从零建，两点写清楚免得后来人不敢动：
+#   - 为什么安全：运行期数据从不落在 ${SERVER_DIR} 下（cmd/main 里 export 的
+#     ELEC_DB_PATH / ELEC_BACKUP_DIR 都指向 TRIM_PKGVAR）。这里删的是构建产物里的
+#     占位目录，而且此刻服务还没启动过，里面不可能有真实数据。
+#   - 为什么要删：Next 16 + Turbopack 会把开发机上的 data/ 也 trace 进 .next/standalone
+#     （字面路径那条 outputFileTracingExcludes 够不着，见 next.config.ts 的说明和 task-27），
+#     本地开发库不能进包。
+rm -rf "${SERVER_DIR}/data"
 mkdir -p "${SERVER_DIR}/data"
 
 # 清理不必要的文件（减小包体积）
