@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { getDb } from './db';
+import { getSetting, setSetting } from './db';
 
 const TOKEN_EXPIRY = '365d';
 
@@ -60,29 +60,20 @@ export interface User {
 }
 
 export function initializeAuth() {
-  const db = getDb();
-  const userSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('auth_password') as { value: string } | undefined;
-  if (!userSetting) {
-    const defaultHash = bcrypt.hashSync('admin', 10);
-    db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('auth_password', defaultHash);
+  // 用 === undefined 判断「没这一项」：空串也算已设置，不能重新灌默认密码
+  if (getSetting('auth_password') === undefined) {
+    setSetting('auth_password', bcrypt.hashSync('admin', 10));
   }
 }
 
 export function verifyPassword(password: string): boolean {
-  const db = getDb();
-  const userSetting = db.prepare('SELECT value FROM settings WHERE key = ?').get('auth_password') as { value: string } | undefined;
-  if (!userSetting) return false;
-  return bcrypt.compareSync(password, userSetting.value);
+  const stored = getSetting('auth_password');
+  if (!stored) return false;
+  return bcrypt.compareSync(password, stored);
 }
 
 export function changePassword(newPassword: string) {
-  const db = getDb();
-  const hash = bcrypt.hashSync(newPassword, 10);
-  db.prepare(`
-    INSERT INTO settings (key, value, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-  `).run('auth_password', hash);
+  setSetting('auth_password', bcrypt.hashSync(newPassword, 10));
 }
 
 export function generateToken(): string {

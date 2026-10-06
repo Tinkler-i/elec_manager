@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import type { Reading, Stats } from '../types';
+import type { Reading, Setting, Stats } from '../types';
 
 const DB_PATH = process.env.ELEC_DB_PATH || path.join(process.cwd(), 'data', 'elec.db');
 
@@ -103,6 +103,44 @@ export function getInitialReading(): number {
   const setting = db.prepare('SELECT value FROM settings WHERE key = ?').get('initial_reading') as { value: string } | undefined;
   cachedInitialReading = setting ? parseFloat(setting.value) : 0;
   return cachedInitialReading;
+}
+
+// ─── 设置：读写 ─────────────────────────────────────────────────────────────
+//
+// settings 是通用的 key-value 表，凭据（auth_password、mcp_key_*）和普通配置
+// （rate_per_kwh、initial_reading）混在一起。外发前必须先过 toPublicSettings()。
+
+/** 读一个设置项；不存在返回 undefined */
+export function getSetting(key: string): string | undefined {
+  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+}
+
+/**
+ * 写一个设置项（不存在则插入，存在则覆盖）。
+ *
+ * 刻意不在这里自动清设置缓存：touchMcpKey 会周期性写 mcp_key_last_used_at，
+ * 自动清缓存会让 getRatePerKwh / getInitialReading 无谓地反复查库。
+ * 改了 rate_per_kwh / initial_reading 的调用方要自己调 invalidateSettingsCache()。
+ */
+export function setSetting(key: string, value: string): void {
+  getDb().prepare(`
+    INSERT INTO settings (key, value, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, value);
+}
+
+/** 删除一个设置项 */
+export function deleteSetting(key: string): void {
+  getDb().prepare('DELETE FROM settings WHERE key = ?').run(key);
+}
+
+/** 全部设置项（含 updated_at）。外发前必须先过 toPublicSettings() */
+export function getAllSettings(): Setting[] {
+  return getDb().prepare('SELECT key, value, updated_at FROM settings').all() as Setting[];
 }
 
 // ─── 读数：查询 ─────────────────────────────────────────────────────────────
@@ -255,18 +293,17 @@ export function createReading(input: CreateReadingInput): Reading {
   return created;
 }
 
-/** 改完之后，若「原本紧跟其后的那条」的 previous_reading 指向旧值，跟着改掉 */
+/**
+ * 改完之后，若「原本紧跟其后的那条」的 previous_reading 指向旧值，跟着改掉。
+ *
+ * 必须把被改的这条排除掉：它可能被挪到比原来更晚的位置，那时它会出现在自己的
+ * 「后一条」候选里 —— 结果 previous_reading 被改成自己的值，用量直接算成 0。
+ */
 function updateNextReadingPrevious(oldReading: Reading, newValue: number): void {
-  const next = getDb().prepare(
-    `SELECT id, previous_reading FROM readings
-     WHERE reading_date > ? OR (reading_date = ? AND COALESCE(reading_time, '') > COALESCE(?, ''))
-     ORDER BY reading_date ASC, reading_time ASC LIMIT 1`,
-  ).get(oldReading.reading_date, oldReading.reading_date, oldReading.reading_time ?? '') as
-    | { id: string; previous_reading: number | null }
-    | undefined;
+  const nextReading = findNextReading(oldReading.reading_date, oldReading.reading_time, oldReading.id);
 
-  if (next && next.previous_reading === oldReading.reading_value) {
-    getDb().prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(newValue, next.id);
+  if (nextReading && nextReading.previous_reading === oldReading.reading_value) {
+    getDb().prepare('UPDATE readings SET previous_reading = ? WHERE id = ?').run(newValue, nextReading.id);
   }
 }
 

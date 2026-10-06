@@ -6,6 +6,7 @@ import {
   deleteReading,
   findNextReading,
   findPreviousReading,
+  getAllSettings,
   getDb,
   getReadingById,
   getReadings,
@@ -258,10 +259,8 @@ export function createMcpServer(): McpServer {
     inputSchema: {},
   }, async () => {
     try {
-      const db = getDb();
-      const settings = db.prepare('SELECT key, value FROM settings').all() as { key: string; value: string }[];
       // auth_password / mcp_key_* 不外发，名单见 src/lib/settings-keys.ts
-      return jsonResult(toPublicSettings(settings));
+      return jsonResult(toPublicSettings(getAllSettings()));
     } catch (e) {
       return errorResult(e instanceof Error ? e.message : '获取设置失败');
     }

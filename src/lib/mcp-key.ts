@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { getDb } from './db';
+import { deleteSetting, getSetting, setSetting } from './db';
 
 /**
  * MCP 独立密钥。
@@ -35,24 +35,9 @@ function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+/** db.ts 的 getSetting 返回 undefined，这里统一成 null，调用方判断更直接 */
 function readSetting(key: string): string | null {
-  const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as
-    | { value: string }
-    | undefined;
-  return row?.value ?? null;
-}
-
-function writeSetting(key: string, value: string) {
-  getDb()
-    .prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    )
-    .run(key, value);
-}
-
-function deleteSetting(key: string) {
-  getDb().prepare('DELETE FROM settings WHERE key = ?').run(key);
+  return getSetting(key) ?? null;
 }
 
 /** 密钥状态。**不含密钥本身** —— 库里只有哈希，没有可返回的明文。 */
@@ -69,8 +54,8 @@ export function getMcpKeyStatus(): McpKeyStatus {
 /** 生成新密钥并返回明文（**只有这一次**）。旧密钥立刻失效。 */
 export function generateMcpKey(): string {
   const key = PREFIX + crypto.randomBytes(32).toString('base64url');
-  writeSetting(HASH_KEY, sha256(key));
-  writeSetting(CREATED_KEY, new Date().toISOString());
+  setSetting(HASH_KEY, sha256(key));
+  setSetting(CREATED_KEY, new Date().toISOString());
   deleteSetting(USED_KEY);
   return key;
 }
@@ -103,5 +88,5 @@ export function touchMcpKey() {
   const last = readSetting(USED_KEY);
   const now = Date.now();
   if (last && now - Date.parse(last) < TOUCH_INTERVAL_MS) return;
-  writeSetting(USED_KEY, new Date(now).toISOString());
+  setSetting(USED_KEY, new Date(now).toISOString());
 }
