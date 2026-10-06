@@ -1,5 +1,5 @@
 appname=App.Native.ElecMeter
-version=1.9.2
+version=1.9.3
 display_name=电表数据管理
 desc=电表数据管理系统，支持手动录入电表读数、自动计算用电量、数据可视化分析。
 source=thirdparty
@@ -14,6 +14,11 @@ platform=x86
 
 # 飞牛的 Node 运行时是独立应用包，不在系统 PATH 里。
 # 不声明这一条，装到干净的飞牛设备上会找不到 node。
+#
+# 这一条和 CI 的 Node 版本是绑死的：nodejs_v22 是 Node 22（NODE_MODULE_VERSION
+# 127），所以 CI 也必须用 Node 22 编 better-sqlite3。版本对不上会在设备上
+# ERR_DLOPEN_FAILED，表现是登录接口 500、页面能打开但登不进去。
+# 换这里的依赖应用名，就要同步换 CI 的 node-version。
 install_dep_apps=nodejs_v22
 
 os_min_version=0.9.27

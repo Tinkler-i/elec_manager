@@ -104,6 +104,29 @@ install_dep_apps=nodejs_v22
 
 网络不通时界面显示「没能检查更新」和具体原因，不会显示成「已是最新」—— 那是两件事。
 
+## Node 版本必须和依赖应用对齐
+
+`manifest` 里声明了 `install_dep_apps=nodejs_v22`，也就是依赖飞牛应用商店的 Node 22 运行时。**CI 也必须用 Node 22 编译**，否则原生模块的 ABI 对不上：
+
+| | Node 22 | Node 24 |
+|---|---|---|
+| `NODE_MODULE_VERSION` | 127 | 137 |
+| 飞牛 `nodejs_v22` 提供的是 | ✅ | — |
+
+`better-sqlite3` 是原生模块，按编译时的 ABI 注册。用 Node 24 编出来（ABI 137）装到只有 Node 22（ABI 127）的设备上，加载直接失败：
+
+```
+Error: The module 'better_sqlite3.node' was compiled against a different
+Node.js version using NODE_MODULE_VERSION 137. This version of Node.js
+requires NODE_MODULE_VERSION 127.
+```
+
+这个故障的症状很有迷惑性：**页面能正常打开，但登录接口 500、登不进去**。因为所有走数据库的接口都在 `new Database()` 时抛异常，而登录接口的 catch 块统一返回「登录失败」—— 看起来像密码问题，其实是模块加载问题。
+
+CI 里有两道校验拦它：装完依赖后断言 `process.versions.modules === '127'` 并实际 `require` 一次；打完 fpk 后再从包里解出 `better-sqlite3` 加载一次，验的是成品而不是仓库。
+
+`sharp` 不受影响 —— 它走 N-API，ABI 稳定。
+
 ## 还没在真机上验证的
 
 - `os_min_version=0.9.27`：沿用了原来的值。装了 `nodejs_v22` 依赖之后，这个下限是否需要抬高，得在设备上试。

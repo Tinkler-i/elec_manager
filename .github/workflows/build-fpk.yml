@@ -32,11 +32,25 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # 必须与飞牛 nodejs_v22 的 ABI 一致（Node 22 → NODE_MODULE_VERSION 127）。
+          # 这里原来写的是 24，编出来的 better-sqlite3 是 ABI 137，装到设备上
+          # ERR_DLOPEN_FAILED，登录接口直接 500。下一道步骤会拦住这种情况。
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
         run: npm install
+
+      - name: 校验 Node ABI 与飞牛 nodejs_v22 一致
+        run: |
+          ABI="$(node -p 'process.versions.modules')"
+          echo "runner Node $(node -v)，NODE_MODULE_VERSION=${ABI}"
+          if [ "$ABI" != "127" ]; then
+            echo "::error::CI 的 Node ABI 是 ${ABI}，飞牛 nodejs_v22 需要 127（Node 22）"
+            echo "::error::这样编出来的 better-sqlite3 在设备上会 ERR_DLOPEN_FAILED"
+            exit 1
+          fi
+          node -e "const D=require('better-sqlite3'); new D(':memory:').exec('create table t(a)'); console.log('better-sqlite3 在 ABI 127 下可加载')"
 
       - name: Build Next.js
         run: npm run build
@@ -148,6 +162,21 @@ jobs:
 
           cd fnos/App.Native.ElecMeter
           ../fnpack build
+
+      - name: 校验包内原生模块能加载
+        run: |
+          # 前一道只验了仓库里的 node_modules，这里验真正打进 fpk 的那份 ——
+          # 打包过程会删文件、换目录，验到成品才算数。
+          PKG="fnos/App.Native.ElecMeter"
+          TMP="$(mktemp -d)"
+          tar -xzf "${PKG}/App.Native.ElecMeter.fpk" -C "$TMP"
+          tar -xzf "$TMP/app.tgz" -C "$TMP"
+          MOD="$TMP/server/node_modules/better-sqlite3" node -e "
+            const D = require(process.env.MOD);
+            new D(':memory:').exec('create table t(a)');
+            console.log('包内 better-sqlite3 可加载，ABI =', process.versions.modules);
+          "
+          rm -rf "$TMP"
 
       - name: Rename fpk
         run: |
