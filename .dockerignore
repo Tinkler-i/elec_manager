@@ -1,7 +1,37 @@
+# 镜像里自己装依赖、自己编译，所以本地的东西一律不进构建上下文。
+
+# 依赖与构建产物
 node_modules
 .next
+out
+build
+
+# 版本库与本地工具
 .git
-*.md
+.gitattributes
+.github
+.mimocode
+.vscode
+.idea
+
+# 飞牛打包产物：又大又和 Docker 无关
+fnos/App.Native.ElecMeter/app/server
+fnos/*.fpk
+fnos/fnpack
+fnos/fnpack.exe
+fnpack-*-windows-amd64
+
+# 本地数据与密钥：绝对不能烤进镜像
+data
+jwt_secret
 .env
-.env.local
-data/backups
+.env.*
+*.pem
+*.key
+
+# 文档与杂项
+*.md
+*.zip
+*.log
+*.tsbuildinfo
+next-env.d.ts

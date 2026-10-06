@@ -1,14 +1,32 @@
+# 两种用法：
+#   docker compose pull && docker compose up -d     # 用 GHCR 上的多架构镜像（推荐）
+#   docker compose up -d --build                    # 本地从源码构建
+#
+# 数据全在 elec-data 卷里（数据库、备份、jwt_secret）。升级只换镜像，卷不动。
 services:
   elec:
-    build: .
+    image: ghcr.io/tinkler-i/elec-meter:latest
+    build:
+      context: .
+      args:
+        # 国内网络可换成 registry.cn-hangzhou.aliyuncs.com/library/node:22-alpine
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     container_name: elec-meter
+    restart: unless-stopped
     ports:
-      - "16543:16543"
+      - "${ELEC_PORT:-16543}:16543"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ELEC_DB_PATH: /app/data/elec.db
+      ELEC_BACKUP_DIR: /app/data/backups
+      # 留空则首次启动自动生成，并持久化到数据卷里的 jwt_secret；
+      # 只有多实例/多容器共享同一份数据时才需要显式指定。
+      JWT_SECRET: ${JWT_SECRET:-}
     volumes:
       - elec-data:/app/data
-    environment:
-      - NODE_ENV=production
-    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     deploy:
       resources:
         limits:

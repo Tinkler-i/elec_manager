@@ -29,14 +29,41 @@ npm run dev
 
 ### Docker 部署
 
+镜像在容器内自己装依赖、自己编译。`better-sqlite3` 是原生模块，复用宿主机上编好的 `.next` 产物换个平台必然加载失败（Windows 产物是 PE 文件，glibc 与 musl 也不通用），所以不存在「先本地 build 再 docker build」这条路。
+
 ```bash
-# 使用 docker compose
+# 拉现成的多架构镜像（amd64 / arm64）
+docker pull ghcr.io/tinkler-i/elec-meter:latest
+
+# 用 compose 起（数据落在 elec-data 卷里）
 docker compose up -d
 
-# 或单独构建
-docker build -t elec-meter .
-docker run -d -p 16543:16543 -v elec-data:/app/data elec-meter
+# 想从源码自己编
+docker compose up -d --build
 ```
+
+镜像地址 `ghcr.io/tinkler-i/elec-meter`，标签跟随版本：`1.9.4`、`1.9`、`latest`。
+
+不用 compose 的话：
+
+```bash
+docker run -d --name elec-meter \
+  -p 16543:16543 \
+  -v elec-data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/tinkler-i/elec-meter:latest
+```
+
+拉不到 `node:22-alpine` 或 npm 太慢时，用构建参数换镜像站：
+
+```bash
+docker build \
+  --build-arg NODE_IMAGE=registry.cn-hangzhou.aliyuncs.com/library/node:22-alpine \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  -t elec-meter .
+```
+
+容器以非 root 用户 `nextjs`（uid 1001）运行，数据目录是 `/app/data`。**绑定挂载**代替数据卷时记得先 `chown 1001:1001` 宿主机目录，否则应用写不进去。
 
 ### 飞牛 fnOS
 
@@ -57,11 +84,23 @@ cd fnos
 
 ### Node.js 直接运行
 
+`output: standalone` 的产物**不含**静态资源，得自己搬过去 —— `fnos/build.sh` 与 Dockerfile 做的是同一件事：
+
 ```bash
+npm ci
 npm run build
-cd .next/standalone
-node server.js
+
+mkdir -p /opt/elec
+cp -r .next/standalone/. /opt/elec/
+mkdir -p /opt/elec/.next/static
+cp -r .next/static/. /opt/elec/.next/static/
+cp -r public /opt/elec/public
+
+cd /opt/elec
+PORT=16543 HOSTNAME=0.0.0.0 ELEC_DB_PATH=/opt/elec/data/elec.db node server.js
 ```
+
+`.next/node_modules` 里那批哈希目录（`better-sqlite3-<hash>`）不能删：Turbopack 编出来的服务端代码是按哈希名 require 的。飞牛打包之所以能删，是因为它做了重命名替换，普通部署没这一步。
 
 ## 数据模型
 
@@ -219,10 +258,25 @@ MCP 端点也接受当前登录会话的 JWT，方便在浏览器里调试，但
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `JWT_SECRET` | JWT 密钥 | 自动生成并持久化 |
-| `ELEC_DB_PATH` | 数据库路径 | `data/elec.db` |
+| `JWT_SECRET` | JWT 密钥；不设则自动生成并持久化到数据库同目录的 `jwt_secret` | 自动生成 |
+| `ELEC_DB_PATH` | 数据库路径 | `data/elec.db`（相对启动目录） |
+| `ELEC_DATA_DIR` | 数据目录，同时是备份目录的默认位置 | 数据库所在目录 |
+| `ELEC_BACKUP_DIR` | 备份目录 | `${ELEC_DATA_DIR}/backups` |
 | `PORT` | 服务端口 | `16543` |
 | `HOSTNAME` | 绑定地址 | `0.0.0.0` |
+| `TRIM_APPVER` | 飞牛注入的实际安装版本，优先于构建期版本 | 未设置 |
+| `ELEC_UPDATE_REPO` | 检查更新用的 GitHub 仓库 | `Tinkler-i/elec_manager` |
+| `GITHUB_TOKEN` | 检查更新时把 GitHub API 配额从 60 次/小时提到 5000 | 未设置 |
+| `TZ` | 时区（compose 里默认 `Asia/Shanghai`） | 未设置 |
+
+构建期参数（Dockerfile）：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `NODE_IMAGE` | 基础镜像；国内可换镜像站（要换同一套 alpine 镜像的镜像站，`apk` 才能照常跑） | `node:22-alpine` |
+| `NPM_REGISTRY` | npm 源 | `https://registry.npmjs.org` |
+
+PM2 部署脚本的路径与端口也能用环境变量覆盖：`ELEC_INSTALL_DIR`、`ELEC_PORT`（见 `deploy.sh` / `manage.sh`）。
 
 ## API 接口
 
@@ -253,7 +307,7 @@ MCP 端点也接受当前登录会话的 JWT，方便在浏览器里调试，但
 - **数据库**: SQLite (better-sqlite3)
 - **认证**: JWT (jsonwebtoken + jose) + bcryptjs
 - **MCP**: @modelcontextprotocol/sdk
-- **CI/CD**: GitHub Actions（双架构自动构建 amd64/arm64）
+- **CI/CD**: GitHub Actions —— `ci.yml` 跑类型检查 / lint / 单测 / 构建；`build-fpk.yml` 打飞牛包；`docker.yml` 构建多架构镜像并推 GHCR（只在发版与手动触发时构建，PR 只做冒烟不推送）
 
 ## 项目结构
 
@@ -267,7 +321,8 @@ elec/
 │   └── proxy.ts          # 全局认证代理（Next.js 16）
 ├── mcp-server.ts         # MCP Stdio 服务器
 ├── fnos/                 # 飞牛 fnOS 应用配置
-├── Dockerfile            # Docker 构建
+├── .github/workflows/    # CI：检查/构建、飞牛 fpk、Docker 镜像
+├── Dockerfile            # Docker 多阶段构建（容器内编译）
 └── docker-compose.yml    # Docker Compose 配置
 ```
 

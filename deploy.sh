@@ -1,10 +1,16 @@
 #!/bin/bash
-# 电表管理系统部署脚本
+# 电表管理系统部署脚本（PM2 方式）
+#
+# 安装目录与端口不再写死，可用环境变量覆盖：
+#   ELEC_INSTALL_DIR=/vol2/1000/Docker/Elec_manger ELEC_PORT=16543 ./deploy.sh
+# 容器化部署见 docker-compose.yml。
 
-INSTALL_DIR="/vol2/1000/Docker/Elec_manger"
-PORT=16543
+INSTALL_DIR="${ELEC_INSTALL_DIR:-/vol2/1000/Docker/Elec_manger}"
+PORT="${ELEC_PORT:-16543}"
 
 echo "=== 电表管理系统部署 ==="
+echo "安装目录: ${INSTALL_DIR}"
+echo "端口: ${PORT}"
 
 # 检查Node.js
 if ! command -v node &> /dev/null; then
@@ -15,7 +21,12 @@ fi
 echo "Node.js版本: $(node -v)"
 
 # 进入项目目录
-cd "$INSTALL_DIR"
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "错误: 安装目录不存在: $INSTALL_DIR"
+    echo "用 ELEC_INSTALL_DIR 指定项目所在目录，例如 ELEC_INSTALL_DIR=/opt/elec ./deploy.sh"
+    exit 1
+fi
+cd "$INSTALL_DIR" || exit 1
 
 # 安装依赖
 echo "安装依赖..."
@@ -30,14 +41,14 @@ echo "构建项目..."
 npm run build
 
 # 创建PM2配置
-cat > ecosystem.config.cjs << 'EOF'
+cat > ecosystem.config.cjs << EOF
 module.exports = {
   apps: [{
     name: 'elec-meter',
     script: '.next/standalone/server.js',
     env: {
       NODE_ENV: 'production',
-      PORT: 16543
+      PORT: ${PORT}
     },
     max_memory_restart: '200M',
     autorestart: true,

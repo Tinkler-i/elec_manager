@@ -1,7 +1,17 @@
 #!/bin/bash
-# 电表管理系统管理脚本
+# 电表管理系统管理脚本（PM2 方式）
+#
+# 安装目录可用 ELEC_INSTALL_DIR 覆盖（默认沿用 NAS 上的旧路径）：
+#   ELEC_INSTALL_DIR=/path/to/elec ./manage.sh status
 
-cd /vol2/1000/Docker/Elec_manger
+INSTALL_DIR="${ELEC_INSTALL_DIR:-/vol2/1000/Docker/Elec_manger}"
+
+if [ ! -d "$INSTALL_DIR" ]; then
+    echo "错误: 安装目录不存在: $INSTALL_DIR"
+    echo "用 ELEC_INSTALL_DIR 指定项目所在目录，例如 ELEC_INSTALL_DIR=/opt/elec ./manage.sh status"
+    exit 1
+fi
+cd "$INSTALL_DIR" || exit 1
 
 case "$1" in
     start)

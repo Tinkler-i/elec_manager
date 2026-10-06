@@ -1,0 +1,57 @@
+name: CI
+
+# 每次推送与 PR 都跑一遍「类型检查 → lint → 单测 → 构建」。
+# 不在这里构建镜像：镜像走 docker.yml，只在发版和手动触发时构建。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 类型检查 / Lint / 单测 / 构建
+    runs-on: ubuntu-latest
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # 与飞牛 nodejs_v22、Dockerfile 的基础镜像保持一致：
+          # better-sqlite3 是原生模块，Node 大版本换了 ABI 就换了。
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 这里直接调命令而不走 `npm run xxx`：package.json 按 AGENTS.md 归应用开发，
+      # 多平台这边不往里塞 script。
+      #
+      # next-env.d.ts 在 .gitignore 里，干净检出时不存在，而 tsconfig 的 include
+      # 又引用了它 —— 先跑 typegen 把声明文件和路由类型生成出来，再 tsc。
+      # 见 node_modules/next/dist/docs/01-app/03-api-reference/06-cli/next.md。
+      - name: 生成 Next 类型声明
+        run: npx next typegen
+
+      - name: 类型检查
+        run: ./node_modules/.bin/tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: 单元测试（图表与统计口径）
+        run: node --experimental-strip-types scripts/test-calculations.ts
+
+      - name: 构建
+        run: npm run build
