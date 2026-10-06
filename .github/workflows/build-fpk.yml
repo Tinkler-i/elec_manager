@@ -56,6 +56,14 @@ jobs:
           fi
           node -e "const D=require('better-sqlite3'); new D(':memory:').exec('create table t(a)'); console.log('better-sqlite3 在 ABI 127 下可加载')"
 
+      # 发版前的质量门。build-fpk.yml 原来只构建，tag 一打就直接出包，
+      # 烂代码能进 Release。这两步失败就中止，不出包。
+      - name: Lint
+        run: npm run lint
+
+      - name: 单元测试（图表与统计口径）
+        run: npm test
+
       - name: Build Next.js
         run: npm run build
 
