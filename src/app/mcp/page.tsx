@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
   BookOpen,
   Check,
@@ -30,6 +30,16 @@ import { fmtDateTime } from "@/lib/format";
 import { useAsyncAll } from "@/lib/use-async-data";
 
 /**
+ * 站点源。页面存活期间不会变，所以不需要订阅任何东西。
+ *
+ * 三个快照函数必须定义在模块级：写成内联箭头函数的话每次渲染都是新引用，
+ * useSyncExternalStore 会反复重新订阅。
+ */
+const subscribeOrigin = () => () => {};
+const getOriginSnapshot = () => window.location.origin;
+const getOriginServerSnapshot = () => "";
+
+/**
  * MCP 服务页。
  *
  * 三个 Tab：远程 HTTP 接入、本地 stdio 接入、工具清单。工具清单来自
@@ -54,6 +64,19 @@ export default function McpPage() {
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"reset" | "revoke" | null>(null);
+
+  /**
+   * 站点源（形如 `https://host:port`）。
+   *
+   * 渲染期不能直接读 `window`：SSR 时它是 undefined、客户端首帧却有值，两边渲染
+   * 出的 HTML 不同，React 19 会报水合不一致。
+   *
+   * 用 useSyncExternalStore 而不是 useState + useEffect：服务端快照是空串，
+   * 水合阶段 React 用的也是它，水合完成后发现客户端快照不同才重渲染 —— 首帧
+   * 两边必然一致。写成 effect 里 setState 会被 react-hooks/set-state-in-effect
+   * 拦下（cascading render），这里也顺带避开了。
+   */
+  const origin = useSyncExternalStore(subscribeOrigin, getOriginSnapshot, getOriginServerSnapshot);
 
   const keyStatus = values.keyStatus ?? { configured: false, createdAt: null, lastUsedAt: null };
 
@@ -111,8 +134,7 @@ export default function McpPage() {
   }
 
   const tools = values.tools?.tools ?? [];
-  const baseUrl = typeof window === "undefined" ? "" : `${window.location.protocol}//${window.location.host}`;
-  const mcpUrl = `${baseUrl}/api/mcp`;
+  const mcpUrl = `${origin}/api/mcp`;
 
   const httpConfig = JSON.stringify(
     {
