@@ -16,7 +16,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/layout/empty-state";
-import { SkeletonBar } from "@/components/layout/skeleton-bar";
 import { dailyUsage, type DailyUsagePoint } from "@/lib/chart-data";
 import { fmtKwh, fmtMoney, monthsAgo, monthsBefore, today } from "@/lib/format";
 import type { Reading } from "@/types";
@@ -37,11 +36,9 @@ const QUICK_RANGES = [
 export function DailyUsageChart({
   readings,
   rate,
-  loading = false,
 }: {
   readings: Reading[];
   rate: number;
-  loading?: boolean;
 }) {
   // 用户显式选过的区间；null = 还没动过，用下面按数据算出来的默认区间
   const [picked, setPicked] = useState<{ start: string; end: string } | null>(null);
@@ -118,9 +115,7 @@ export function DailyUsageChart({
           />
         </div>
 
-        {loading ? (
-          <SkeletonBar className="h-[360px] w-full" />
-        ) : points.length === 0 ? (
+        {points.length === 0 ? (
           <EmptyState
             title="该时间段内暂无读数数据"
             description={

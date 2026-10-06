@@ -26,14 +26,12 @@ export function StatCard({
   hint,
   icon: Icon,
   tone = "default",
-  loading = false,
 }: {
   label: string;
   value: ReactNode;
   hint?: ReactNode;
   icon?: LucideIcon;
   tone?: StatTone;
-  loading?: boolean;
 }) {
   return (
     <div className="rounded-xl bg-card p-4 ring-1 ring-foreground/10">
@@ -41,11 +39,7 @@ export function StatCard({
         <span className="text-xs font-medium text-muted-foreground">{label}</span>
         {Icon ? <Icon className="size-4 shrink-0 text-muted-foreground/70" /> : null}
       </div>
-      {loading ? (
-        <div className="mt-2 h-8 w-24 animate-pulse rounded-md bg-muted" />
-      ) : (
-        <div className={cn("mt-1 text-2xl font-semibold tabular-nums", TONES[tone])}>{value}</div>
-      )}
+      <div className={cn("mt-1 text-2xl font-semibold tabular-nums", TONES[tone])}>{value}</div>
       {hint ? <div className="mt-1 text-xs text-muted-foreground">{hint}</div> : null}
     </div>
   );
