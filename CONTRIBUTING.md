@@ -40,7 +40,7 @@ npm run mcp      # 启动 stdio 版 MCP 服务（需要联网拉 tsx，见下方
 
 - `type`：`feat` `fix` `docs` `refactor` `test` `chore` `ci` `perf`
 - `scope`（可选）：`web` `api` `db` `mcp` `fnos` `ci`
-- 说明用中文，祈使句（「改成…」「补上…」），**不超过 50 字**（硬上限 72），句末不加句号
+- 说明用中文，祈使句（「改成…」「补上…」），**不超过 50 字**，句末不加句号
 
 ### 正文：默认不写
 

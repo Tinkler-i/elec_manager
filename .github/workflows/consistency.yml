@@ -1,8 +1,15 @@
 name: 一致性检查
 
 # 把几条容易「改了一边忘了另一边」的约定变成 CI 检查，不依赖谁记得去看文档。
-# 只挂在 pull_request 上，不碰 tag 触发的发版流程。
+#
+# pull_request → guard job（改动一致性、版本号、锁文件、范围过宽）
+# push(master) → commit-msg job（提交信息规范）
+#
+# 为什么 push 也要挂：master 是可以直接推的，只在 PR 上查就会漏掉直接推上来的提交 ——
+# 那样这道门对「本次推送进来的提交」实际上是不存在的。
 on:
+  push:
+    branches: [master]
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -11,12 +18,15 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: consistency-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # PR 用 PR 号（新推送取消旧的，合理）；push 用 ref 且**不取消** ——
+  # 取消一次 push 的检查＝那批提交永远不会被查（下一次的 before 已经往前走了）。
+  group: consistency-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   guard:
     name: 一致性检查
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -110,3 +120,27 @@ jobs:
           else
             gh pr comment "$PR" --body "$BODY"
           fi
+
+  # 提交信息规范（CONTRIBUTING.md 的「提交」一节）。规范只写在文档里等于没有规矩，
+  # 这里让它变成一道**硬门**：标题格式 / 标题 ≤50 字（硬上限 72）/ 正文非空行 ≤5 /
+  # 不出现 task-N。超了就是红，不是警告。
+  #
+  # 只查**本次推送进来的提交**（before..after），历史里那些长正文的提交不在作用范围。
+  commit-msg:
+    name: 提交信息规范
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 要算 before..after 的差集就得有完整历史；默认的 fetch-depth: 1 只拿得到一个提交，
+          # 那样这道门会假绿。
+          fetch-depth: 0
+
+      - name: 检查本次推送的提交信息
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: bash scripts/check-pushed-commits.sh
