@@ -71,12 +71,31 @@ function sha256(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
+/**
+ * 按**字素簇**（用户眼里的「一个字符」）数长度。
+ *
+ * 为什么不能用 `String.length`：它数的是 **UTF-16 码元**，不是字符。
+ *   · `😀` 用户看是 1 个字符，`'😀'.length === 2`
+ *   · `🧑‍🚀`（ZWJ 序列）用户看是 1 个字符，`length === 5`
+ * 用码元数就会把「64 个 emoji」算成 128 而拒绝，偏偏错误信息还写着「最长 64 个字符」——
+ * 用户数出来正好 64，系统说超了，**那句话是假的**。实测（task-46）：
+ *   `😀`×64 → 400、`😀`×32 → 201、`🧑‍🚀`×63 → 400、64 个汉字 → 201。
+ * 所以这里必须按字素簇数。`Intl.Segmenter` 在 Node 18+ 与现代浏览器都有。
+ * **别把它「简化」回 `String.length`** —— 那会让错误信息重新变成假的。
+ */
+const graphemeSegmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
+
+function graphemeLength(value: string): number {
+  return [...graphemeSegmenter.segment(value)].length;
+}
+
 /** 备注规范化：去首尾空白、空串按「没有备注」存 null、超长抛错。 */
 function normalizeNote(note: string | null | undefined): string | null {
   if (note === undefined || note === null) return null;
   const trimmed = note.trim();
   if (trimmed.length === 0) return null;
-  if (trimmed.length > MAX_NOTE_LENGTH) {
+  // 长度按字素簇判（见 graphemeLength 的注释），这样「64 个字符」这句才是真的
+  if (graphemeLength(trimmed) > MAX_NOTE_LENGTH) {
     throw new McpKeyValidationError(`备注最长 ${MAX_NOTE_LENGTH} 个字符`);
   }
   return trimmed;

@@ -27,6 +27,35 @@ import { readJson } from '@/lib/read-json';
 
 export const dynamic = 'force-dynamic';
 
+/**
+ * 请求体大小上限（字节）。
+ *
+ * 和 `MAX_NOTE_LENGTH`（备注长度）是**两件事**，别混：
+ *   · 这个上限管「一次请求能塞多少字节」；
+ *   · 备注长度管「存下来的备注多长」。
+ *
+ * 为什么必须有：POST 的 body 是可选的，实现是「先 clone().text() 探空、再 trim、再判备注长度」。
+ * 没有这个上限时，1MB 全空格的 body 会被 trim 成空、当成「无备注」**接受（201）**，
+ * 等于长度限制完全不约束请求体大小（`clone().text()` 与 `json()` 还各读一份，约 2×body）。
+ *
+ * 也别改成「trim 前判长度」来凑：那会把 `"  " + 64 个汉字 + "  "` 这种合法输入拒掉。
+ */
+const MAX_BODY_BYTES = 8 * 1024;
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+/**
+ * 请求体超限的响应：400 + 一条**固定文案**的 warn。
+ * 不把 body 内容写进日志（同 readJson 对畸形 JSON 的做法）—— 超限的 body 里可能有备注，
+ * 但那不是记日志的理由；记「发生了」就够运维发现异常了。
+ */
+function bodyTooLargeResponse(): NextResponse {
+  console.warn(`请求体过大被拒绝（上限 ${MAX_BODY_BYTES} 字节，内容不入日志）`);
+  return NextResponse.json({ error: '请求体过大' }, { status: 400 });
+}
+
 /** 列表。只返回 id / 备注 / 时间。 */
 export async function GET() {
   return NextResponse.json({ keys: listMcpKeys() });
@@ -43,6 +72,9 @@ export async function POST(request: NextRequest) {
     // （别改成判断 request.body === null：实测 Next 对无 body 的 POST 给的也是一个
     //   非 null 的空流，那个判断不成立。）
     const raw = await request.clone().text();
+    if (byteLength(raw) > MAX_BODY_BYTES) {
+      return bodyTooLargeResponse();
+    }
     const parsed =
       raw.trim() === ''
         ? { ok: true as const, body: {} as { note?: unknown } }
@@ -70,6 +102,11 @@ export async function POST(request: NextRequest) {
 /** 改备注。note 传 null（或空串）表示清掉备注。 */
 export async function PATCH(request: NextRequest) {
   try {
+    // 和 POST 用同一个上限：PATCH 同样吃 body，没道理一个限一个不限
+    const raw = await request.clone().text();
+    if (byteLength(raw) > MAX_BODY_BYTES) {
+      return bodyTooLargeResponse();
+    }
     const parsed = await readJson<{ id?: unknown; note?: unknown }>(request);
     if (!parsed.ok) return parsed.response;
     const { id, note } = parsed.body;
