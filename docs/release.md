@@ -52,6 +52,15 @@ tag 必须打在 `master` 上。tag 推送会触发 CI。
 - **arm64 的 fnpack 资源名是 `linux-arm`，不是 `linux-arm64`**。官方文档写错了，后者返回 404。
 - **矩阵保留 `fail-fast: false`**。否则一个架构失败会把另一个已跑完的 job 也取消，连健康的产物都拿不到。
 
+**同时确认「Docker 镜像」那几个 job 全绿**：`计算镜像名与标签`、`构建 amd64 并冒烟（登录接口）`、
+`构建并推送 amd64`、`构建并推送 arm64`、`合并多架构 manifest`。
+
+⚠️ 这条路径**只在 tag 推送与 `workflow_dispatch` 下才跑 build / merge，PR 事件不跑** ——
+所以 **PR 上它显示 success 不代表它是好的**。v1.9.5 就是这样：`build` 从来没真正执行过，
+第一次跑就红了，那个版本没发出 Docker 镜像。改动 `docker.yml` 的 build / merge（尤其
+`outputs`、digest、`imagetools` 那几步）之后，必须在下一次 tag（或手动触发）上确认，
+别拿 PR 的绿当验证。
+
 ### 5. 验证产物
 
 两个架构都成功才算发出版。下载产物核对：

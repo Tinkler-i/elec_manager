@@ -126,6 +126,11 @@ jobs:
   build:
     name: 构建并推送 ${{ matrix.arch }}
     needs: [meta, smoke]
+    # ⚠️ 这个 job（和 merge）只在 tag 推送与 workflow_dispatch 下跑，PR 事件不跑。
+    # 所以 **PR 上「Docker 镜像」显示 success 不代表这条路径是好的** —— v1.9.5 之前
+    # 一直是这样：build 从来没真正执行过，第一次跑就红了，于是那个版本没有镜像。
+    # 改动 build / merge（尤其 outputs、digest、imagetools 这几步）时，必须在
+    # workflow_dispatch 或 tag 上实测，别拿 PR 的绿当验证。
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     strategy:
       # 一个架构挂掉不连累另一个，否则连健康的 digest 都拿不到
@@ -162,7 +167,25 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
-          outputs: type=image,push-by-digest=true,name-canonical=true
+          # name= 不能删 —— v1.9.5 就是栽在这里。
+          #
+          # ⚠️ 状态：**这个修复尚未实测。** 依据是 buildx 源码级的静态分析 + 下面那条
+          # 天然对照；**下一次打 tag 才是它第一次真跑**。别把它当成「已修复」——
+          # 下次发版要专门确认这个 job 是绿的（见 docs/release.md 的发版后检查）。
+          #
+          # 根因（buildx/build/opt.go 的 toSolveOpt()）：
+          #   · 有 tags → 用 tags 去填每个 image/oci/docker export 的 name
+          #   · 没有 tags → 只要命中「type=image 且 name 为空且 push 为真」就直接报
+          #     "tag is needed when pushing to registry"
+          # 报错文本说的是 tag，实际判的是 **name** —— 所以这个提示极具误导性。
+          # 别顺着「加个 tags 就好」的思路改：加了会让两个架构互相覆盖标签，merge 白做。
+          #
+          # 天然对照：同一个 Dockerfile、同样的 runner —— smoke job 有 tags: 所以一直绿；
+          # 这个 step 既没有 tags 也没有 name，所以一执行就红。一个变量，两个结果。
+          #
+          # 我们按 digest 出图、由 merge 统一打标签，本来就不该给 tags；
+          # 那就要给一个**不带标签的**镜像名，name-canonical=true 也依赖它才能规范化。
+          outputs: type=image,name=${{ needs.meta.outputs.image }},push-by-digest=true,name-canonical=true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           build-args: |
