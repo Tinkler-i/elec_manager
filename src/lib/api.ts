@@ -1,6 +1,7 @@
 import type {
   BackupFile,
-  McpKeyStatus,
+  McpKeyCreated,
+  McpKeyInfo,
   McpToolInfo,
   Reading,
   ReadingInput,
@@ -149,11 +150,60 @@ export const backupApi = {
 
 export const mcpApi = {
   tools: () => request<{ tools: McpToolInfo[] }>("/api/mcp/tools"),
-  /** 密钥状态，不含密钥本身 */
-  keyStatus: () => request<McpKeyStatus>("/api/mcp/key"),
-  /** 生成/重新生成。明文密钥只在这一个响应里出现一次 */
-  generateKey: () => request<McpKeyStatus & { key: string }>("/api/mcp/key", jsonInit("POST")),
-  revokeKey: () => request<McpKeyStatus>("/api/mcp/key", jsonInit("DELETE")),
+
+  /**
+   * 密钥列表。后端已按创建时间倒序排好。
+   *
+   * 返回值多做一道运行时形状校验，因为 `request<T>` 只是类型断言、不做校验：
+   *
+   * - **什么情况下会不成立**：后端还是单把形态的旧版本时，`GET /api/mcp/key`
+   *   返回 `{configured, createdAt, lastUsedAt}` —— HTTP 200、没有错误。
+   *   这时 `data.keys` 是 `undefined`，而 `tsc` 全绿：类型系统在这里帮不上忙。
+   * - **不成立时界面会怎么骗人**：`values.keys?.keys ?? []` 得到空数组，页面
+   *   显示「还没有独立密钥」这个空态。密钥其实还在库里，界面却告诉用户一把都
+   *   没有 —— 他会以为密钥丢了，甚至重新生成，把在用的客户端全部踢下线。
+   *
+   * 所以宁可抛错：页面会走「密钥列表没取到」那一行 + 重试，是诚实的失败。
+   *
+   * 只在 listKeys 上加：别的接口没有「形状错了会伪装成空态」这个问题。要扩到
+   * 全仓得先想清楚哪些返回值真需要校验、校验失败怎么表达，那是另一个话题。
+   */
+  listKeys: () =>
+    request<{ keys: McpKeyInfo[] }>("/api/mcp/key").then((data) => {
+      if (!Array.isArray(data?.keys)) {
+        throw new Error("服务端返回的密钥列表格式不对（后端可能还是旧版本），请升级后重试");
+      }
+      return data;
+    }),
+
+  /**
+   * 新建一把密钥。
+   *
+   * 明文只在这次响应里出现一次（库里只存 SHA-256），之后再也拿不回来。
+   * 备注留空就不带这个字段 —— 后端兼容空 body，会按 null 存。
+   */
+  createKey: (note?: string) =>
+    request<McpKeyCreated>("/api/mcp/key", jsonInit("POST", note ? { note } : undefined)),
+
+  /**
+   * 改备注。
+   *
+   * `note` **必须显式给出**：后端缺这个字段会返 400，不会当成「清空」。
+   * 要清空就传 `null`，不要传 `undefined`。
+   */
+  updateKeyNote: (id: string, note: string | null) =>
+    request<{ info: McpKeyInfo }>("/api/mcp/key", jsonInit("PATCH", { id, note })),
+
+  /** 吊销指定的一把 */
+  revokeKey: (id: string) =>
+    request<{ ok: boolean; revoked: number }>(
+      `/api/mcp/key?id=${encodeURIComponent(id)}`,
+      jsonInit("DELETE"),
+    ),
+
+  /** 吊销全部。返回实际吊销了几把 */
+  revokeAllKeys: () =>
+    request<{ ok: boolean; revoked: number }>("/api/mcp/key", jsonInit("DELETE")),
 };
 
 /* ── 更新检查 ───────────────────────────────────────── */

@@ -48,15 +48,29 @@ export interface McpToolInfo {
 }
 
 /**
- * MCP 密钥状态。
+ * 一把 MCP 密钥的元信息。
  *
  * **不含密钥本身** —— 库里只存 SHA-256 哈希，生成之后服务端也拿不回明文。
- * 所以界面上的「管理」只能是看状态 + 重新生成，不能是「查看密钥」。
+ * 所以界面上的「管理」只能是看列表 + 改备注 + 吊销，不能是「查看密钥」。
  */
-export interface McpKeyStatus {
-  configured: boolean;
-  createdAt: string | null;
+export interface McpKeyInfo {
+  id: string;
+  /** 备注。后端会 trim，空串按 null 存 */
+  note: string | null;
+  createdAt: string;
+  /** 从没用过就是 null */
   lastUsedAt: string | null;
+}
+
+/**
+ * 新建密钥的响应。
+ *
+ * `key` 是明文，**只在这一个响应里出现一次** —— 之后库里只有哈希，
+ * 刷新页面也拿不回来。别把它存进任何会持久化的地方。
+ */
+export interface McpKeyCreated {
+  key: string;
+  info: McpKeyInfo;
 }
 
 /** 新建/编辑读数时提交的载荷 */

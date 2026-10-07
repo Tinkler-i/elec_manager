@@ -6,12 +6,13 @@ import {
   Check,
   Copy,
   KeyRound,
+  Pencil,
   Plug,
-  RotateCw,
   Server,
   Terminal,
   Trash2,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -23,11 +24,22 @@ import { SkeletonBar } from "@/components/layout/skeleton-bar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { errText, mcpApi } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
 import { useAsyncAll } from "@/lib/use-async-data";
+import type { McpKeyCreated, McpKeyInfo } from "@/types";
+
+/* ── 密钥 ───────────────────────────────────────────────────────────────── */
+
+/** 备注长度上限。后端超了返 400，这里先挡一道，别让用户白填 */
+const NOTE_MAX = 64;
+/** 密钥把数上限。后端超了返 400 */
+const KEY_LIMIT = 20;
+
+/* ── 页头用的站点源 ─────────────────────────────────────────────────────── */
 
 /**
  * 站点源。页面存活期间不会变，所以不需要订阅任何东西。
@@ -39,6 +51,9 @@ const subscribeOrigin = () => () => {};
 const getOriginSnapshot = () => window.location.origin;
 const getOriginServerSnapshot = () => "";
 
+/** 待确认的破坏性操作。吊销全部要单独一档，确认文案也更重 */
+type PendingConfirm = { kind: "revoke"; info: McpKeyInfo } | { kind: "revoke-all" } | null;
+
 /**
  * MCP 服务页。
  *
@@ -49,7 +64,7 @@ const getOriginServerSnapshot = () => "";
 export default function McpPage() {
   const { values, errors, isInitialLoading, isInitialFailed, reload } = useAsyncAll({
     tools: mcpApi.tools,
-    keyStatus: mcpApi.keyStatus,
+    keys: mcpApi.listKeys,
   });
 
   const [copied, setCopied] = useState<string | null>(null);
@@ -58,12 +73,15 @@ export default function McpPage() {
    * 刚生成的密钥明文。
    *
    * 只在生成那一次有值 —— 库里存的是 SHA-256 哈希，刷新页面就再也拿不回来了。
-   * 所以它不进 useAsyncAll（那会被后续刷新覆盖），而是单独一个 state，界面上也
-   * 明确写「只显示这一次」。
+   * 所以它不进 useAsyncAll（那会被后续刷新覆盖），而是单独一个 state；页面刷新
+   * 后它自然是 null，明文不会再出现。
    */
-  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+  const [generated, setGenerated] = useState<McpKeyCreated | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState<"reset" | "revoke" | null>(null);
+  const [confirm, setConfirm] = useState<PendingConfirm>(null);
 
   /**
    * 站点源（形如 `https://host:port`）。
@@ -78,15 +96,54 @@ export default function McpPage() {
    */
   const origin = useSyncExternalStore(subscribeOrigin, getOriginSnapshot, getOriginServerSnapshot);
 
-  const keyStatus = values.keyStatus ?? { configured: false, createdAt: null, lastUsedAt: null };
+  const keys = values.keys?.keys ?? [];
+  // 还没拿到、也还没报错 = 首次加载中。不能只看页级的 isInitialLoading：
+  // tools 先回来时它就已经是 false 了，那会闪一下「还没有密钥」的假空态。
+  const keysLoading = values.keys === undefined && !errors.keys;
+  const atLimit = keys.length >= KEY_LIMIT;
 
-  async function generateKey() {
+  async function createKey() {
+    if (busy || atLimit) return;
+    setBusy(true);
+    try {
+      const result = await mcpApi.createKey(noteDraft.trim() || undefined);
+      // 明文只在这里落一次 state，刷新即消失
+      setGenerated(result);
+      setNoteDraft("");
+      toast.success("已生成新密钥");
+      await reload();
+    } catch (err) {
+      toast.error(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveNote(id: string) {
     if (busy) return;
     setBusy(true);
     try {
-      const result = await mcpApi.generateKey();
-      setGeneratedKey(result.key);
-      toast.success("已生成新密钥");
+      // 清空备注要显式传 null —— 后端把「缺 note 字段」当成 400，不当成清空
+      const note = editDraft.trim();
+      await mcpApi.updateKeyNote(id, note === "" ? null : note);
+      setEditingId(null);
+      toast.success("备注已更新");
+      await reload();
+    } catch (err) {
+      toast.error(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revokeKey(id: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await mcpApi.revokeKey(id);
+      // 吊销的正好是刚生成那把：明文留着会误导，一起清掉
+      setGenerated((prev) => (prev?.info.id === id ? null : prev));
+      toast.success("已吊销该密钥");
       await reload();
     } catch (err) {
       toast.error(errText(err));
@@ -96,13 +153,14 @@ export default function McpPage() {
     }
   }
 
-  async function revokeKey() {
+  async function revokeAllKeys() {
     if (busy) return;
     setBusy(true);
     try {
-      await mcpApi.revokeKey();
-      setGeneratedKey(null);
-      toast.success("已吊销密钥");
+      const result = await mcpApi.revokeAllKeys();
+      setGenerated(null);
+      setEditingId(null);
+      toast.success(`已吊销 ${result.revoked} 把密钥`);
       await reload();
     } catch (err) {
       toast.error(errText(err));
@@ -141,7 +199,7 @@ export default function McpPage() {
       mcpServers: {
         "elec-meter": {
           url: mcpUrl,
-          headers: { Authorization: `Bearer ${generatedKey ?? "<你的 MCP 密钥>"}` },
+          headers: { Authorization: `Bearer ${generated?.key ?? "<你的 MCP 密钥>"}` },
         },
       },
     },
@@ -221,63 +279,124 @@ export default function McpPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <CardTitle>MCP 密钥</CardTitle>
-                  <CardDescription>独立于登录会话，可随时重新生成</CardDescription>
+                  <CardDescription>
+                    独立于登录会话。每把可带备注区分用途；吊销后，用它的客户端会立刻失效。
+                  </CardDescription>
                 </div>
-                {keyStatus.configured ? (
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm" disabled={busy} onClick={() => setConfirm("reset")}>
-                      <RotateCw />
-                      重新生成
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      disabled={busy}
-                      onClick={() => setConfirm("revoke")}
-                    >
-                      <Trash2 />
-                      吊销
-                    </Button>
-                  </div>
-                ) : (
-                  <Button size="sm" disabled={busy} onClick={generateKey}>
-                    <KeyRound />
-                    生成密钥
+                {keys.length > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    disabled={busy}
+                    onClick={() => setConfirm({ kind: "revoke-all" })}
+                  >
+                    <Trash2 />
+                    吊销全部
                   </Button>
-                )}
+                ) : null}
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
-              {generatedKey ? (
+            <CardContent className="space-y-4">
+              {generated ? (
                 <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
                   <div className="flex items-center gap-2 text-xs font-medium text-amber-700 dark:text-amber-300">
                     <TriangleAlert className="size-4" />
-                    只显示这一次，请立刻保存到 MCP 客户端
+                    只显示这一次，关闭或刷新后无法再查看
                   </div>
                   <div className="flex items-center gap-2">
                     <code className="hide-scrollbar min-w-0 flex-1 overflow-x-auto rounded-md bg-background/70 px-3 py-2 font-mono text-xs">
-                      {generatedKey}
+                      {generated.key}
                     </code>
-                    <CopyButton text={generatedKey} label="密钥" copied={copied} onCopy={copyText} />
+                    <CopyButton text={generated.key} label="密钥" copied={copied} onCopy={copyText} />
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {generated.info.note ? `备注：${generated.info.note} · ` : ""}
+                      库里只存 SHA-256 哈希，明文连服务端也拿不回来。
+                    </span>
+                    <Button variant="outline" size="sm" onClick={() => setGenerated(null)}>
+                      我已保存
+                    </Button>
                   </div>
                 </div>
-              ) : keyStatus.configured ? (
-                <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                  <div className="font-medium text-foreground">已配置</div>
-                  <div className="mt-1">
-                    创建于 {keyStatus.createdAt ? fmtDateTime(keyStatus.createdAt) : "未知"} · 最后使用{" "}
-                    {keyStatus.lastUsedAt ? fmtDateTime(keyStatus.lastUsedAt) : "从未"}
-                  </div>
-                  <div className="mt-1">
-                    库里只存 SHA-256 哈希，明文连服务端也拿不回来 —— 忘了就「重新生成」。
-                  </div>
+              ) : null}
+
+              <div className="space-y-2">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    value={noteDraft}
+                    onChange={(e) => setNoteDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void createKey();
+                    }}
+                    placeholder="备注，例如「家里那台 NAS」（可选）"
+                    aria-label="新密钥的备注"
+                    maxLength={NOTE_MAX}
+                    disabled={busy || atLimit}
+                  />
+                  <Button
+                    className="shrink-0"
+                    onClick={() => void createKey()}
+                    disabled={busy || atLimit}
+                  >
+                    <KeyRound />
+                    生成密钥
+                  </Button>
                 </div>
+                <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>备注最多 {NOTE_MAX} 个字符，留空则显示「未命名」</span>
+                  <span>
+                    {keys.length} / {KEY_LIMIT} 把
+                  </span>
+                </div>
+                {atLimit ? (
+                  <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
+                    已经到 {KEY_LIMIT} 把上限了。先吊销不用的，再建新的。
+                  </p>
+                ) : null}
+              </div>
+
+              {keysLoading ? (
+                <div className="space-y-2">
+                  <SkeletonBar className="h-16 w-full" />
+                  <SkeletonBar className="h-16 w-full" />
+                </div>
+              ) : errors.keys ? (
+                <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs">
+                  <div className="font-medium text-destructive">密钥列表没取到</div>
+                  <div className="mt-1 text-muted-foreground">{errText(errors.keys)}</div>
+                  <Button variant="outline" size="sm" className="mt-2" onClick={() => void reload()}>
+                    重试
+                  </Button>
+                </div>
+              ) : keys.length === 0 ? (
+                <EmptyState
+                  icon={KeyRound}
+                  title="还没有独立密钥"
+                  description="生成之后 MCP 客户端就用它接入，与你的登录会话彻底分开 —— 网页登出、改密码都不会影响它。建议给每把起个备注，方便日后分辨该吊销哪一把。"
+                  className="py-8"
+                />
               ) : (
-                <div className="rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
-                  还没有独立密钥。生成之后 MCP 客户端就用它接入，与你的登录会话彻底分开 ——
-                  网页登出、改密码都不会影响它。
-                </div>
+                <ul className="space-y-2">
+                  {keys.map((info) => (
+                    <KeyRow
+                      key={info.id}
+                      info={info}
+                      editing={editingId === info.id}
+                      draft={editDraft}
+                      busy={busy}
+                      onStartEdit={() => {
+                        setEditingId(info.id);
+                        setEditDraft(info.note ?? "");
+                      }}
+                      onDraftChange={setEditDraft}
+                      onSave={() => void saveNote(info.id)}
+                      onCancelEdit={() => setEditingId(null)}
+                      onRevoke={() => setConfirm({ kind: "revoke", info })}
+                    />
+                  ))}
+                </ul>
               )}
             </CardContent>
           </Card>
@@ -428,17 +547,129 @@ export default function McpPage() {
       <ConfirmDialog
         open={confirm !== null}
         onOpenChange={(open) => !open && setConfirm(null)}
-        title={confirm === "revoke" ? "吊销 MCP 密钥" : "重新生成 MCP 密钥"}
+        title={confirm?.kind === "revoke-all" ? "吊销全部 MCP 密钥" : "吊销这把 MCP 密钥"}
         description={
-          confirm === "revoke"
-            ? "吊销后，所有用这个密钥的 MCP 客户端会立刻断开，需要重新配置。"
-            : "重新生成后，旧密钥立刻失效，所有已配置的 MCP 客户端都要换成新的。"
+          confirm?.kind === "revoke-all" ? (
+            <>
+              会立刻吊销全部 <strong>{keys.length}</strong> 把密钥。所有已经配好的 MCP 客户端会
+              <strong>同时断开</strong>，必须逐台重新配置。这个操作不可撤销。
+            </>
+          ) : confirm?.kind === "revoke" ? (
+            <>
+              即将吊销「
+              <strong>{confirm.info.note?.trim() || "未命名"}</strong>
+              」。正在使用这把密钥的 MCP 客户端会立刻失效，需要改用其它密钥。
+            </>
+          ) : undefined
         }
-        confirmLabel={confirm === "revoke" ? "吊销" : "重新生成"}
-        destructive={confirm === "revoke"}
-        onConfirm={confirm === "revoke" ? revokeKey : generateKey}
+        confirmLabel={confirm?.kind === "revoke-all" ? "全部吊销" : "吊销"}
+        destructive
+        busy={busy}
+        onConfirm={() => {
+          if (!confirm) return;
+          if (confirm.kind === "revoke-all") void revokeAllKeys();
+          else void revokeKey(confirm.info.id);
+        }}
       />
     </div>
+  );
+}
+
+/**
+ * 列表里的一行密钥。
+ *
+ * 必须是模块级组件：写在页面组件里等于每次渲染都新建一个组件类型，React 会把它
+ * 当成另一个组件卸载重建（就地编辑时输入框会丢焦点）。
+ */
+function KeyRow({
+  info,
+  editing,
+  draft,
+  busy,
+  onStartEdit,
+  onDraftChange,
+  onSave,
+  onCancelEdit,
+  onRevoke,
+}: {
+  info: McpKeyInfo;
+  editing: boolean;
+  draft: string;
+  busy: boolean;
+  onStartEdit: () => void;
+  onDraftChange: (value: string) => void;
+  onSave: () => void;
+  onCancelEdit: () => void;
+  onRevoke: () => void;
+}) {
+  const note = info.note?.trim();
+
+  return (
+    <li className="rounded-lg border border-border p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1 space-y-1">
+          {editing ? (
+            <Input
+              value={draft}
+              onChange={(e) => onDraftChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onSave();
+                if (e.key === "Escape") onCancelEdit();
+              }}
+              aria-label="备注"
+              placeholder="备注（可留空）"
+              maxLength={NOTE_MAX}
+              disabled={busy}
+            />
+          ) : (
+            <div className="flex items-center gap-2">
+              <KeyRound className="size-4 shrink-0 text-muted-foreground" />
+              <span
+                className={`truncate text-sm font-medium ${note ? "" : "text-muted-foreground"}`}
+              >
+                {note || "未命名"}
+              </span>
+            </div>
+          )}
+          <div className="text-xs text-muted-foreground">
+            创建于 {fmtDateTime(info.createdAt)} ·{" "}
+            {info.lastUsedAt ? `最后使用 ${fmtDateTime(info.lastUsedAt)}` : "从未使用"}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap gap-1">
+          {editing ? (
+            <>
+              <Button size="sm" disabled={busy} onClick={onSave}>
+                <Check />
+                保存
+              </Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={onCancelEdit}>
+                <X />
+                取消
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={onStartEdit}>
+                <Pencil />
+                改备注
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:text-destructive"
+                disabled={busy}
+                onClick={onRevoke}
+              >
+                <Trash2 />
+                吊销
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </li>
   );
 }
 
