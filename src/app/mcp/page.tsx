@@ -29,21 +29,27 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { errText, mcpApi } from "@/lib/api";
 import { fmtDateTime } from "@/lib/format";
+import { MAX_BODY_BYTES, MAX_KEYS, MAX_NOTE_LENGTH } from "@/lib/mcp-key-limits";
 import { useAsyncAll } from "@/lib/use-async-data";
 import type { McpKeyCreated, McpKeyInfo } from "@/types";
 
 /* ── 密钥 ───────────────────────────────────────────────────────────────── */
 
 /**
- * 备注长度上限，单位是**字素簇**（一个 emoji 算 1）。后端超了返 400，这里先挡一道。
+ * 三个上限全部来自 `@/lib/mcp-key-limits` —— **前后端同一份定义**，别在这里再抄一遍数字。
  *
- * 注意别用 `maxLength` 属性来挡：HTML 的 maxLength 数的是 UTF-16 码元，一个 😀 算 2、
- * 一个带 ZWJ 的 🧑‍🚀 算 7。用户想输 64 个 emoji，输入框会在 32 个就截断 —— 而后端按
- * 字素簇算，会接受 64 个。两边对「64 个字符」的理解必须一致，所以只能 JS 计数。
+ * 它们是三种不同的约束，前端三个都要查：
+ *  · `MAX_NOTE_LENGTH` —— 产品约束，按**字素簇**算
+ *  · `MAX_BODY_BYTES`  —— 传输约束，按 **UTF-8 字节**算
+ *  · `MAX_KEYS`        —— 数量约束（到顶就该先禁用「生成」，而不是让用户点完再吃 400）
+ *
+ * **前两个互相保证不了。** 一个「字符」里可以塞任意多个组合记号（`a` 后面跟 64 个
+ * U+0301 仍然只算 1 个字素簇），所以 64 个字素簇**可能**远超 8 KiB。只查字素簇就会出现
+ * 「界面显示 64 / 64、按钮可用」→ 提交 → 后端 400 —— 一句用户看得见的谎。
+ *
+ * 另外别用 `maxLength` 属性来挡长度：HTML 的 maxLength 数的是 UTF-16 码元，一个 😀 算 2、
+ * 一个带 ZWJ 的 🧑‍🚀 算 7，用户想输 64 个 emoji 会在 32 个就被截断。
  */
-const NOTE_MAX = 64;
-/** 密钥把数上限。后端超了返 400 */
-const KEY_LIMIT = 20;
 
 /**
  * 数备注长度。规则与后端 `Intl.Segmenter('zh', { granularity: 'grapheme' })` 一致。
@@ -59,6 +65,11 @@ const KEY_LIMIT = 20;
  * 所以这里返回两样东西：`count` 是计数器，`exact` 说明它是不是真的按字素簇算。
  * **提示文案要跟着 `exact` 改口** —— 一边按码点算、一边告诉用户「一个 emoji 算 1 个」，
  * 就是在骗人。
+ *
+ * ⚠️ **跨引擎不保证一致。** 切分结果取决于引擎自带的 Unicode 数据，QA 实测 Node 与
+ * Chromium 在 37,928 条样本里有 2,456 条不同（最小复现 `🗩\u200D🗩`：Node 算 1、Chromium
+ * 算 2；方向上通常是前端多算、更严，但 Firefox / Safari 没验过）。所以**前端这道 gate
+ * 是提示、不是保证**，最终判定在后端 —— 文案里别承诺「一定算得一样」。
  *
  * SSR 和客户端用的是同一个实现、同一个输入，算出的数必然相同，不会引入水合不一致。
  */
@@ -76,6 +87,19 @@ const noteLength = (text: string) => graphemeCounter.count(text.trim());
 
 /** 长度单位说明。降级成按码点算时不能再说「一个 emoji 算 1 个」 */
 const NOTE_UNIT_HINT = graphemeCounter.exact ? "（一个 emoji 算 1 个）" : "（按码点算）";
+
+/**
+ * 算出**真正会发出去的那个请求体**有多少 UTF-8 字节。
+ *
+ * 形状必须与 `api.ts` 里 `mcpApi.createKey` / `updateKeyNote` 构造的一致 —— 那边走
+ * `jsonInit(method, payload)` → `JSON.stringify(payload)`。`MAX_BODY_BYTES` 是后端对
+ * **整个请求体**的限制，所以这里连 JSON 外壳和字段名一起算。算的和发的不是同一个形状，
+ * 就又是「界面放行、后端拒绝」。
+ *
+ * 传 `undefined` 表示不带 body（备注留空时 `createKey` 就是这么发的），算 0 字节。
+ */
+const jsonBodyBytes = (payload: unknown): number =>
+  payload === undefined ? 0 : new TextEncoder().encode(JSON.stringify(payload)).length;
 
 /* ── 页头用的站点源 ─────────────────────────────────────────────────────── */
 
@@ -138,16 +162,22 @@ export default function McpPage() {
   // 还没拿到、也还没报错 = 首次加载中。不能只看页级的 isInitialLoading：
   // tools 先回来时它就已经是 false 了，那会闪一下「还没有密钥」的假空态。
   const keysLoading = values.keys === undefined && !errors.keys;
-  const atLimit = keys.length >= KEY_LIMIT;
+  const atLimit = keys.length >= MAX_KEYS;
   // 备注按字素簇算，不是 String.length —— 一个 emoji 算 1 个
-  const noteLen = noteLength(noteDraft);
-  const noteTooLong = noteLen > NOTE_MAX;
+  const trimmedNote = noteDraft.trim();
+  const noteLen = noteLength(trimmedNote);
+  const noteTooLong = noteLen > MAX_NOTE_LENGTH;
+  // 字素簇没超不代表发得出去：组合记号能把体积顶上去（见 jsonBodyBytes 的注释）。
+  // 形状与 mcpApi.createKey 真正发的 body 一致 —— 备注留空时它不带 body
+  const noteBodyBytes = jsonBodyBytes(trimmedNote ? { note: trimmedNote } : undefined);
+  const noteTooBig = noteBodyBytes > MAX_BODY_BYTES;
+  const noteBlocked = noteTooLong || noteTooBig;
 
   async function createKey() {
-    if (busy || atLimit || noteTooLong) return;
+    if (busy || atLimit || noteBlocked) return;
     setBusy(true);
     try {
-      const result = await mcpApi.createKey(noteDraft.trim() || undefined);
+      const result = await mcpApi.createKey(trimmedNote || undefined);
       // 明文只在这里落一次 state，刷新即消失
       setGenerated(result);
       setNoteDraft("");
@@ -162,17 +192,24 @@ export default function McpPage() {
 
   async function saveNote(id: string) {
     if (busy) return;
-    // 超长不该走到这里（按钮已禁用），留一道兜底：后端会 400，与其让用户看报错，
-    // 不如在这一层就说清楚
-    if (noteLength(editDraft) > NOTE_MAX) {
-      toast.error(`备注最多 ${NOTE_MAX} 个字符${NOTE_UNIT_HINT}`);
+    // 清空备注要显式传 null —— 后端把「缺 note 字段」当成 400，不当成清空
+    const note = editDraft.trim();
+    const payloadNote = note === "" ? null : note;
+    // 两种超限都不该走到这里（按钮已禁用），留一道兜底：后端会 400，
+    // 与其让用户看报错，不如在这一层就说清楚
+    if (noteLength(note) > MAX_NOTE_LENGTH) {
+      toast.error(`备注最多 ${MAX_NOTE_LENGTH} 个字符${NOTE_UNIT_HINT}`);
+      return;
+    }
+    // 形状与 mcpApi.updateKeyNote 真正发的 body 一致
+    const bodyBytes = jsonBodyBytes({ id, note: payloadNote });
+    if (bodyBytes > MAX_BODY_BYTES) {
+      toast.error(`备注编码后 ${bodyBytes} 字节，超过请求体上限 ${MAX_BODY_BYTES} 字节`);
       return;
     }
     setBusy(true);
     try {
-      // 清空备注要显式传 null —— 后端把「缺 note 字段」当成 400，不当成清空
-      const note = editDraft.trim();
-      await mcpApi.updateKeyNote(id, note === "" ? null : note);
+      await mcpApi.updateKeyNote(id, payloadNote);
       setEditingId(null);
       toast.success("备注已更新");
       await reload();
@@ -379,26 +416,26 @@ export default function McpPage() {
                     }}
                     placeholder="备注，例如「家里那台 NAS」（可选）"
                     aria-label="新密钥的备注"
-                    aria-invalid={noteTooLong}
+                    aria-invalid={noteBlocked}
                     disabled={busy || atLimit}
                   />
                   <Button
                     className="shrink-0"
                     onClick={() => void createKey()}
-                    disabled={busy || atLimit || noteTooLong}
+                    disabled={busy || atLimit || noteBlocked}
                   >
                     <KeyRound />
                     生成密钥
                   </Button>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                  <span>备注最多 {NOTE_MAX} 个字符，留空则显示「未命名」</span>
+                  <span>备注最多 {MAX_NOTE_LENGTH} 个字符，留空则显示「未命名」</span>
                   <span className="flex items-center gap-x-3">
-                    <span className={noteTooLong ? "font-medium text-destructive" : undefined}>
-                      备注 {noteLen} / {NOTE_MAX}
+                    <span className={noteBlocked ? "font-medium text-destructive" : undefined}>
+                      备注 {noteLen} / {MAX_NOTE_LENGTH}
                     </span>
                     <span>
-                      {keys.length} / {KEY_LIMIT} 把
+                      {keys.length} / {MAX_KEYS} 把
                     </span>
                   </span>
                 </div>
@@ -407,12 +444,23 @@ export default function McpPage() {
                     aria-live="polite"
                     className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
                   >
-                    备注 {noteLen} 个字符，超过 {NOTE_MAX} 了{NOTE_UNIT_HINT}。删掉一些再生成。
+                    备注 {noteLen} 个字符，超过 {MAX_NOTE_LENGTH} 了{NOTE_UNIT_HINT}。删掉一些再生成。
+                  </p>
+                ) : null}
+                {noteTooBig ? (
+                  <p
+                    aria-live="polite"
+                    className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
+                  >
+                    字符数是 {noteLen}，没超 {MAX_NOTE_LENGTH}；但编码后是 {noteBodyBytes} 字节，超过
+                    请求体上限 {MAX_BODY_BYTES} 字节了 —— 超的是
+                    <span className="font-medium">体积</span>，不是字数：组合记号（如声调符）和
+                    emoji 一个字符就占好几个字节。再删一些。
                   </p>
                 ) : null}
                 {atLimit ? (
                   <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
-                    已经到 {KEY_LIMIT} 把上限了。先吊销不用的，再建新的。
+                    已经到 {MAX_KEYS} 把上限了。先吊销不用的，再建新的。
                   </p>
                 ) : null}
               </div>
@@ -663,9 +711,17 @@ function KeyRow({
   onRevoke: () => void;
 }) {
   const note = info.note?.trim();
-  // 就地编辑这一行也按字素簇算，和新建那条保持一致
-  const draftLen = noteLength(draft);
-  const draftTooLong = draftLen > NOTE_MAX;
+  // 就地编辑这条走的是同一个 updateKeyNote 路径，两种上限都要和新建那条一样查
+  const trimmedDraft = draft.trim();
+  const draftLen = noteLength(trimmedDraft);
+  const draftTooLong = draftLen > MAX_NOTE_LENGTH;
+  // 形状与 mcpApi.updateKeyNote 真正发的 body 一致（清空时 note 是 null，不是缺字段）
+  const draftBodyBytes = jsonBodyBytes({
+    id: info.id,
+    note: trimmedDraft === "" ? null : trimmedDraft,
+  });
+  const draftTooBig = draftBodyBytes > MAX_BODY_BYTES;
+  const draftBlocked = draftTooLong || draftTooBig;
 
   return (
     <li className="rounded-lg border border-border p-3">
@@ -677,21 +733,24 @@ function KeyRow({
                 value={draft}
                 onChange={(e) => onDraftChange(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !draftTooLong) onSave();
+                  if (e.key === "Enter" && !draftBlocked) onSave();
                   if (e.key === "Escape") onCancelEdit();
                 }}
                 aria-label="备注"
-                aria-invalid={draftTooLong}
+                aria-invalid={draftBlocked}
                 placeholder="备注（可留空）"
                 disabled={busy}
               />
               <div
                 className={`text-xs ${
-                  draftTooLong ? "font-medium text-destructive" : "text-muted-foreground"
+                  draftBlocked ? "font-medium text-destructive" : "text-muted-foreground"
                 }`}
               >
-                备注 {draftLen} / {NOTE_MAX}
-                {draftTooLong ? ` · 超过 ${NOTE_MAX} 了${NOTE_UNIT_HINT}` : ""}
+                备注 {draftLen} / {MAX_NOTE_LENGTH}
+                {draftTooLong ? ` · 超过 ${MAX_NOTE_LENGTH} 了${NOTE_UNIT_HINT}` : ""}
+                {draftTooBig
+                  ? ` · 字符数没超，但编码后 ${draftBodyBytes} 字节，超过请求体上限 ${MAX_BODY_BYTES} 字节`
+                  : ""}
               </div>
             </div>
           ) : (
@@ -713,7 +772,7 @@ function KeyRow({
         <div className="flex shrink-0 flex-wrap gap-1">
           {editing ? (
             <>
-              <Button size="sm" disabled={busy || draftTooLong} onClick={onSave}>
+              <Button size="sm" disabled={busy || draftBlocked} onClick={onSave}>
                 <Check />
                 保存
               </Button>
