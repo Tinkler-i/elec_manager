@@ -5,6 +5,8 @@
 # "bad interpreter: No such file or directory"，而且很难一眼看出来。
 
 *.sh text eol=lf
+# 钩子没有扩展名，*.sh 盖不到 —— 它被存成 CRLF 会静默失效（#!/bin/bash\r 起不来）
+.githooks/* text eol=lf
 Dockerfile text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf

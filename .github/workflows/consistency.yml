@@ -121,26 +121,63 @@ jobs:
             gh pr comment "$PR" --body "$BODY"
           fi
 
+      # 拦截点的前提：.githooks/commit-msg 必须存在、带可执行位、且是 LF 行尾。
+      # 这三样缺任何一样，钩子都是**静默失效** —— 没人收到提示，提交照样过。
+      # 那就是「看起来在拦、其实没拦」，所以在这里一次全盯住。
+      - name: commit-msg 钩子可用（本地拦截点的前提）
+        run: |
+          set -euo pipefail
+          HOOK=.githooks/commit-msg
+          if [ ! -f "$HOOK" ]; then
+            echo "::error::$HOOK 不存在 —— 提交信息唯一的本地拦截点没了，只剩 CI 的事后检查。"
+            exit 1
+          fi
+          if [ ! -x "$HOOK" ]; then
+            echo "::error::$HOOK 没有可执行位。git 不会执行它，钩子静默失效。"
+            echo "::error::修法：git update-index --chmod=+x $HOOK（然后提交这个模式变更）"
+            exit 1
+          fi
+          # 用 od 而不是直接 grep 文件：MSYS/Git Bash 的 grep 按文本模式读，会把 CRLF
+          # 归一化掉 —— 在 Windows 上永远看不到 CR，本地就没法验这条。od -An -c 把 CR
+          # 渲染成可见的 \r 两个字符，本地和 CI 用的是同一个判据。
+          if od -An -c "$HOOK" | grep -qF '\r'; then
+            echo "::error::$HOOK 里有 CR（CRLF 行尾）。POSIX 上 shebang 会变成 #!/bin/sh\\r，"
+            echo "::error::钩子根本起不来。修法：在 .gitattributes 加一行  .githooks/* text eol=lf"
+            exit 1
+          fi
+          echo "✅ $HOOK 存在、可执行、LF 行尾"
+
   # 提交信息规范（CONTRIBUTING.md 的「提交」一节）。规范只写在文档里等于没有规矩，
-  # 这里让它变成一道**硬门**：标题格式 / 标题 ≤50 字（硬上限 72）/ 正文非空行 ≤5 /
-  # 不出现 task-N。超了就是红，不是警告。
+  # 这里让它变成一道**硬门**：标题格式 / 标题 ≤50 字 / 正文非空行 ≤5 / 不出现 task-N。
+  # 超了就是红，不是警告。判据与 .githooks/commit-msg 共用同一份（scripts/lib/commit-message-rules.mjs）。
   #
-  # 只查**本次推送进来的提交**（before..after），历史里那些长正文的提交不在作用范围。
+  # 两条路径都挂：
+  #   · push → before..after，管直接推上来的（直推 master 时这是**唯一**覆盖它的路径）
+  #   · pull_request → base.sha..head.sha，管走 PR 的；配必需检查能在合并前挡住
+  # 注意：push 侧是**事后**才红的 —— 提交已经进 master 了。真正能拦在提交产生之前的
+  # 只有本地 .githooks/commit-msg 钩子，这里只是兜底与留痕。
   commit-msg:
     name: 提交信息规范
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # 要算 before..after 的差集就得有完整历史；默认的 fetch-depth: 1 只拿得到一个提交，
-          # 那样这道门会假绿。
+          # 要算差集就得有完整历史；默认的 fetch-depth: 1 只拿得到一个提交，那样这道门会假绿。
           fetch-depth: 0
 
-      - name: 检查本次推送的提交信息
+      # 检查脚本是 node 跑的。runner 镜像里自带 node，但别依赖这个隐含前提。
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 检查本次涉及的提交信息
         env:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.event.after }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: bash scripts/check-pushed-commits.sh

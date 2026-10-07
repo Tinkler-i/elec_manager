@@ -1,0 +1,43 @@
+#!/bin/sh
+#
+# 提交信息规范钩子 —— **唯一能在提交产生之前拦住的地方**。
+#
+# git 在创建提交对象之前调用它，$1 是提议的提交信息文件；退出码非 0 时 git 直接
+# 放弃这次提交（`git commit` 失败）。CI 那道 commit-msg job 是**事后**才红的，
+# 拦不住一次已经推出去的提交 —— 所以这个钩子才是真正的拦截点。
+#
+# 判据不在这里：全部在 scripts/lib/commit-message-rules.mjs，这个脚本只负责把它
+# 接到 git 上。CI 走的是同一份判据，两边不会漂。
+#
+# 启用（每个克隆各做一次）：
+#     git config core.hooksPath .githooks
+# 详见 CONTRIBUTING.md 的「提交信息钩子」一节。
+#
+# 没有留跳过开关。真要绕过只有 git 自带的 `--no-verify`，那是 git 的能力，删不掉；
+# CI 那道门就是给这种情况兜底的。
+set -eu
+
+msg_file="${1:-}"
+if [ -z "$msg_file" ]; then
+    echo "commit-msg: 没收到提交信息文件路径（git 应当通过 \$1 传进来）" >&2
+    exit 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+    # 失败要「响」：找不到 node 就拦住提交，而不是悄悄放行。
+    echo "commit-msg: 找不到 node，没法检查提交信息。" >&2
+    echo "  装好 Node 22 再来提交。要临时关掉钩子：git config --unset core.hooksPath" >&2
+    exit 1
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# 注释行用哪个字符开头：跟随 git 的 core.commentChar（默认 #）。
+# git 的 "auto" 是让 git 自己挑一个不出现在信息里的字符，这里近似成 #。
+comment_char="$(git config --get core.commentChar 2>/dev/null || true)"
+if [ -z "$comment_char" ] || [ "$comment_char" = "auto" ]; then
+    comment_char='#'
+fi
+
+exec node scripts/check-commit-messages.mjs --message-file "$msg_file" --comment-char "$comment_char"
