@@ -9,6 +9,7 @@ import {
   updateMcpKeyNote,
 } from '@/lib/mcp-key';
 import { readJson } from '@/lib/read-json';
+import { MAX_BODY_BYTES } from '@/lib/mcp-key-limits';
 
 /**
  * MCP 密钥管理（多把）。
@@ -28,19 +29,18 @@ import { readJson } from '@/lib/read-json';
 export const dynamic = 'force-dynamic';
 
 /**
- * 请求体大小上限（字节）。
+ * 请求体大小上限 —— **值定义在 `src/lib/mcp-key-limits.ts`**（前端也要用同一份，
+ * 别在这里再写一个数）。
  *
- * 和 `MAX_NOTE_LENGTH`（备注长度）是**两件事**，别混：
- *   · 这个上限管「一次请求能塞多少字节」；
- *   · 备注长度管「存下来的备注多长」。
+ * 为什么这个路由必须有它：POST 的 body 是可选的，实现是「先 clone().text() 探空、
+ * 再 trim、再判备注长度」。没有上限时，1MB 全空格的 body 会被 trim 成空、当成
+ * 「无备注」**接受（201）**，等于长度限制完全不约束请求体大小
+ * （`clone().text()` 与 `json()` 还各读一份，约 2×body）。
  *
- * 为什么必须有：POST 的 body 是可选的，实现是「先 clone().text() 探空、再 trim、再判备注长度」。
- * 没有这个上限时，1MB 全空格的 body 会被 trim 成空、当成「无备注」**接受（201）**，
- * 等于长度限制完全不约束请求体大小（`clone().text()` 与 `json()` 还各读一份，约 2×body）。
- *
+ * 它和备注长度是**两件事**（见 mcp-key-limits.ts 的模块注释）：这里管「一次请求多少
+ * 字节」，备注长度管「存下来的备注多长」—— 64 个字素簇可以超过 8192 字节。
  * 也别改成「trim 前判长度」来凑：那会把 `"  " + 64 个汉字 + "  "` 这种合法输入拒掉。
  */
-const MAX_BODY_BYTES = 8 * 1024;
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).length;

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { generateId, getDb } from './db';
+import { MAX_KEYS, MAX_NOTE_LENGTH } from './mcp-key-limits';
 
 /**
  * MCP 独立密钥（2026-10 起支持多把）。
@@ -28,12 +29,6 @@ const PREFIX = 'elecmcp_';
 
 /** 最后使用时间的写入节流：MCP 请求可能很密，没必要每次都写库 */
 const TOUCH_INTERVAL_MS = 60 * 1000;
-
-/** 备注长度上限（字符数，不是字节数） */
-export const MAX_NOTE_LENGTH = 64;
-
-/** 密钥数量上限：够用，且让 listMcpKeys / verifyMcpKey 的规模可控 */
-export const MAX_KEYS = 20;
 
 /** 客户端输入不合法（备注超长、超出上限）。路由据此转 400，不要当成 500。 */
 export class McpKeyValidationError extends Error {
@@ -82,6 +77,13 @@ function sha256(value: string): string {
  *   `😀`×64 → 400、`😀`×32 → 201、`🧑‍🚀`×63 → 400、64 个汉字 → 201。
  * 所以这里必须按字素簇数。`Intl.Segmenter` 在 Node 18+ 与现代浏览器都有。
  * **别把它「简化」回 `String.length`** —— 那会让错误信息重新变成假的。
+ *
+ * ⚠️ **但这个计数不保证跨引擎一致**，别把它当成「前后端同一个算法」：
+ * QA 实测 Node 与 Chromium 的分段有差异（37,928 条里 2,456 条不同，最小复现
+ * `🗩\u200D🗩`：Node=1、Chromium=2），机制是两侧对 `Extended_Pictographic` 的判定
+ * 不同 → GB11 规则是否适用不同。**方向是前端更严**（误拦，不是放行），
+ * 但**只测了 Chromium，Firefox / Safari 未验，方向可能相反**。
+ * 结论：前端那道 gate 是**提示**不是保证，**真正的判定在这个后端函数**。
  */
 const graphemeSegmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
 
