@@ -19,9 +19,11 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ensureStandalone,
-  killTree,
+  killTreeAndWait,
   login,
+  removeDirWithRetry,
   startServer,
+  sweepStaleTempDirs,
   waitForPort,
   waitForPortFree,
 } from './lib/postbuild-server.mjs';
@@ -30,6 +32,10 @@ const PORT_OK = 16811;
 const PORT_BAD = 16812;
 
 ensureStandalone();
+
+// 先清旧账：以前那些异常终止（或被别的进程占着没删成）的运行留下的目录
+const swept = sweepStaleTempDirs();
+if (swept.length > 0) console.log(`清掉遗留的临时目录 ${swept.length} 个：${swept.join(', ')}`);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'elec-backup-'));
 const dataDir = path.join(tmp, 'data');
@@ -124,7 +130,7 @@ async function main() {
       );
     }
 
-    killTree(okServer);
+    await killTreeAndWait(okServer);
     await waitForPortFree(PORT_OK);
 
     // ── 2. 失败路径：备份目录不可用 → 500，不是假成功 ──
@@ -144,12 +150,15 @@ async function main() {
       `status=${badRes.status} body=${badBody.slice(0, 140)}`,
     );
   } finally {
-    killTree(okServer);
-    killTree(badServer);
-    try {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    } catch {
-      // 进程刚被杀，Windows 上文件可能还锁着；留在系统临时目录，不影响结论
+    // 顺序很重要：先等两个服务都真的退出，再删目录。
+    // 旧版是「killTree 一发出就 rmSync」—— 进程还占着 db 文件，Windows 上必然 EPERM，
+    // 然后那个空 catch 把它吞了，于是每跑一次就在系统临时目录留一份。
+    await killTreeAndWait(okServer);
+    await killTreeAndWait(badServer);
+
+    if (!(await removeDirWithRetry(tmp))) {
+      // 不静默：删不掉就得说，否则「收干净了」是个假象
+      console.log(`WARN  临时目录没删掉（还被占用？）：${tmp}`);
     }
   }
 

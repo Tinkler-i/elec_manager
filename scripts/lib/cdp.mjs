@@ -20,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { killTree, sweepStaleTempDirs } from './postbuild-server.mjs';
+import { killTreeAndWait, removeDirWithRetry, sweepStaleTempDirs } from './postbuild-server.mjs';
 
 const DEFAULT_TIMEOUT = 30000;
 
@@ -352,33 +352,9 @@ class Browser {
     }
     this.conn.close();
 
-    if (this.child.exitCode === null) {
-      killTree(this.child);
-      const deadline = Date.now() + timeoutMs;
-      while (this.child.exitCode === null && Date.now() < deadline) {
-        await delay(50);
-      }
-      // 进程刚分裂出的子进程可能躲过第一次 taskkill，再补一次
-      if (this.child.exitCode === null) killTree(this.child);
-    }
-
-    removeDirWithRetry(this.userDataDir);
-  }
-}
-
-function removeDirWithRetry(dir, attempts = 5) {
-  if (!dir) return;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      fs.rmSync(dir, { recursive: true, force: true });
-      return;
-    } catch {
-      // Chrome 释放文件句柄比进程退出晚一点，等一下再来
-      const until = Date.now() + 300;
-      while (Date.now() < until) {
-        /* 忙等一点点，这里没有异步上下文可用 */
-      }
-    }
+    // 等进程真的退出再删 profile：不等就删会撞上 Chrome 还占着的句柄
+    await killTreeAndWait(this.child, { timeoutMs });
+    await removeDirWithRetry(this.userDataDir);
   }
 }
 
@@ -432,7 +408,7 @@ export async function launch({
 } = {}) {
   const executablePath = resolveBrowserPath(browserPath);
   // 兜底：上一次被硬杀时 close() 跑不到，profile 目录会剩下来
-  sweepStaleTempDirs(['elec-cdp-']);
+  sweepStaleTempDirs();
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'elec-cdp-'));
 
   const child = spawn(
@@ -464,8 +440,8 @@ export async function launch({
     const conn = await Connection.connect(version.webSocketDebuggerUrl, timeoutMs);
     return new Browser({ child, conn, port, userDataDir, executablePath });
   } catch (error) {
-    killTree(child);
-    removeDirWithRetry(userDataDir);
+    await killTreeAndWait(child);
+    await removeDirWithRetry(userDataDir);
     throw error;
   }
 }

@@ -139,7 +139,8 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 try {
   // 上一次被硬杀（掐管道 / taskkill /F）时下面的 finally 跑不到，先把那些垃圾收了。
   // 正常收尾的情况下这里是空操作；报出来是为了让「兜底真的在兜」这件事可见。
-  const swept = sweepStaleTempDirs(['elec-cdp-', 'elec-e2e-']);
+  // 不传前缀 = 清 TEST_TEMP_PREFIXES 里那一整套（别让每个脚本只扫自己那份）。
+  const swept = sweepStaleTempDirs();
   if (swept.length > 0) {
     console.log(`· 清掉上次异常终止留下的临时目录 ${swept.length} 个：${swept.join(', ')}`);
   }

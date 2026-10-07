@@ -19,8 +19,9 @@ import path from 'node:path';
 import {
   SERVER,
   ensureStandalone,
-  killTree,
+  killTreeAndWait,
   login as loginViaHttp,
+  removeDirWithRetry,
   startServer,
   sweepStaleTempDirs,
   waitForPortFree,
@@ -129,7 +130,7 @@ export async function start({
   await assertPortAvailable(actualPort);
 
   // 兜底：上一次被硬杀（掐管道、taskkill /F）时 finally 跑不到，临时目录会剩下来
-  sweepStaleTempDirs(['elec-e2e-'], { log: quiet ? undefined : (msg) => console.log(`  ${msg}`) });
+  sweepStaleTempDirs({ log: quiet ? undefined : (msg) => console.log(`  ${msg}`) });
 
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'elec-e2e-'));
   const backupDir = path.join(dataDir, 'backups');
@@ -157,23 +158,11 @@ export async function start({
     if (stopped) return { alreadyStopped: true };
     stopped = true;
 
-    killTree(child);
-    const deadline = Date.now() + 8000;
-    while (child.exitCode === null && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    const exited = child.exitCode !== null;
+    // 先等进程真的退出，再删目录 —— 不等就删会撞上还占着的文件句柄
+    const exited = await killTreeAndWait(child);
     const portFreed = await waitForPortFree(actualPort, 8000);
 
-    let dataRemoved = false;
-    if (!keepData) {
-      try {
-        fs.rmSync(dataDir, { recursive: true, force: true });
-        dataRemoved = !fs.existsSync(dataDir);
-      } catch {
-        dataRemoved = false;
-      }
-    }
+    const dataRemoved = keepData ? false : await removeDirWithRetry(dataDir);
 
     return { exited, portFreed, dataRemoved, dataDir };
   };

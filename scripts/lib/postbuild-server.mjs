@@ -60,6 +60,26 @@ export function killTree(child) {
 }
 
 /**
+ * 杀掉进程树并**等它真的退出**，返回是否确认已退出。
+ *
+ * `killTree` 只负责「发出 taskkill」就返回，进程还在退出的路上。这时候去删它的数据目录
+ * 会撞上仍被占用的文件句柄（Windows 上 EPERM）—— 必须先等。
+ * 不等就删，是「清理写了却什么都没删」的头号原因。
+ */
+export async function killTreeAndWait(child, { timeoutMs = 8000 } = {}) {
+  if (!child || child.exitCode !== null) return true;
+  killTree(child);
+
+  const deadline = Date.now() + timeoutMs;
+  while (child.exitCode === null && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // 进程退出途中可能刚分裂出子进程，躲过第一次 taskkill
+  if (child.exitCode === null) killTree(child);
+  return child.exitCode !== null;
+}
+
+/**
  * 只探 TCP，不发 HTTP。
  *
  * 冷启动场景里这点很关键：任何打到 API 路由的请求都可能提前把 auth.ts 跑起来，
@@ -104,15 +124,51 @@ export function waitForPortFree(port, timeoutMs = 15000) {
 }
 
 /**
+ * 删目录，删不掉就重试几次；返回最终是否真的没了。
+ *
+ * 为什么需要它：文件句柄的释放比「进程退出」还晚一拍，第一次 `rmSync` 常报 EPERM/EBUSY。
+ * **「清理写了却什么都没删」的典型形态就是一个空 catch 把它吞掉** —— 所以这个函数返回
+ * 布尔值，逼调用方如实报出来，而不是默认收干净了。
+ */
+export async function removeDirWithRetry(dir, { attempts = 6, delayMs = 250 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // 还被占着，等一下再来
+    }
+    if (!fs.existsSync(dir)) return true;
+    if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return !fs.existsSync(dir);
+}
+
+/**
+ * 本仓库的测试往系统临时目录里建目录时用的前缀。
+ * 清扫认全体 —— 各脚本各扫各的迟早会漏掉一个（这次就是这么漏的）。
+ */
+export const TEST_TEMP_PREFIXES = [
+  'elec-cdp-', // e2e 的浏览器 profile
+  'elec-e2e-', // e2e 的服务数据目录
+  'elec-coldstart-', // 冷启动回归
+  'elec-backup-', // 备份往返（mkdtemp）
+  'elec-a3-test', // 单测 TEST 12
+  'elec-stats-crosscheck', // 单测 TEST 14
+  'elec-cascade-test', // 单测 TEST 15
+  'elec-backup-test', // 单测 TEST 16
+  'elec-a2-probe', // 单测 TEST 11 的基准目录（当前只读常量，不会真建出来，留着防以后加）
+];
+
+/**
  * 扫掉上一次**异常终止**留下的临时目录。
  *
  * 正常情况下 `stop()` / `close()` 会收干净，但进程被硬杀（`taskkill /F`、
  * PowerShell 掐断管道、平掉终端）时 `finally` 根本跑不到。这个清扫是兜底。
  *
- * 只动自己那几套前缀、且**超过 maxAgeMs 没被碰过**的目录 —— 不碰别的程序的，
- * 也不碰刚创建还在用的。删不掉就跳过，不能因为清扫失败影响测试本身。
+ * 只动 `TEST_TEMP_PREFIXES` 里那几套前缀、且**超过 maxAgeMs 没被碰过**的目录 ——
+ * 不碰别的程序的，也不碰刚创建还在用的。删不掉就跳过，不能因为清扫失败影响测试本身。
  */
-export function sweepStaleTempDirs(prefixes, { maxAgeMs = 2 * 60 * 60 * 1000, log } = {}) {
+export function sweepStaleTempDirs({ prefixes = TEST_TEMP_PREFIXES, maxAgeMs = 2 * 60 * 60 * 1000, log } = {}) {
   const removed = [];
   let entries;
   try {

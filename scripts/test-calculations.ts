@@ -4,6 +4,8 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { removeDirWithRetry, sweepStaleTempDirs } from './lib/postbuild-server.mjs';
+
 /**
  * 图表算法直接跑生产实现（`src/lib/chart-data.ts`），不在本文件里复制一份。
  *
@@ -469,6 +471,29 @@ async function runRegressionTests() {
   const libUrl = (rel: string, bust: string) =>
     `${pathToFileURL(path.join(here, '..', 'src', 'lib', rel)).href}?${bust}`;
 
+  // 先把上一次的旧账清掉。下面每个用例只清「自己这一次」的目录，异常终止（Ctrl+C、
+  // 进程被硬杀）留下的就得靠这道陈旧清扫 —— 超过 2 小时没动过的才算陈旧。
+  const swept = sweepStaleTempDirs();
+  if (swept.length > 0) console.log(`清掉遗留的临时目录 ${swept.length} 个：${swept.join(', ')}`);
+
+  /**
+   * 删掉某个用例的临时目录。
+   *
+   * **必须先关掉这个测试实例的 sqlite 连接**：连接开着时 Windows 上整个目录都删不掉
+   * （EPERM）。旧版就是直接 rmSync + 空 catch，把「没删掉」吞了 —— 于是每跑一次，
+   * 系统临时目录里就多留一份，而输出里什么都看不出来。
+   */
+  async function cleanupTempDir(tmpDir: string, closeDb?: () => void) {
+    try {
+      closeDb?.();
+    } catch {
+      // 没连上 / 已经关了，没什么可关的
+    }
+    if (!(await removeDirWithRetry(tmpDir))) {
+      console.log(`  WARN  临时目录没删掉（还被占用？）：${tmpDir}`);
+    }
+  }
+
   // ── A1：设置出口只放行白名单（fail closed）──────────────────────
   console.log('\n═══ TEST 10: A1 只放行白名单设置（toPublicSettings）═══');
   {
@@ -550,14 +575,16 @@ async function runRegressionTests() {
   console.log('\n═══ TEST 12: A3 同一天两笔（findPreviousReading / findNextReading）═══');
   {
     const savedDbPath = process.env.ELEC_DB_PATH;
-    // 固定目录：better-sqlite3 的连接在测试进程退出前不会关闭，Windows 上删不掉，
-    // 所以每轮先清掉上一轮留下的，避免系统临时目录越积越多。
+    // 固定目录（不是 mkdtemp）：路径可预测，复现问题时能直接连这个库看。
+    // 开头这句清的是**上一次**异常终止留下的；本次的清理由 cleanupTempDir 负责。
     const tmpDir = path.join(os.tmpdir(), 'elec-a3-test');
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(tmpDir, { recursive: true });
+    let closeDb: (() => void) | undefined;
     try {
       process.env.ELEC_DB_PATH = path.join(tmpDir, 'elec.db');
       const db = await import(libUrl('db.ts', `a3-${Date.now()}`));
+      closeDb = () => db.getDb().close();
 
       const first = db.createReading({ reading_value: 1000, reading_date: '2026-09-15', reading_time: '08:00' });
       assert(first.previous_reading === 0, 'A3: 第一笔用初始读数 0', first.previous_reading, 0);
@@ -579,11 +606,7 @@ async function runRegressionTests() {
     } finally {
       if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
       else process.env.ELEC_DB_PATH = savedDbPath;
-      try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      } catch {
-        // Windows 上 sqlite 连接未关，临时文件可能删不掉；留在系统临时目录里，不影响测试结论
-      }
+      await cleanupTempDir(tmpDir, closeDb);
     }
   }
 
@@ -600,9 +623,11 @@ async function runRegressionTests() {
     const tmpDir = path.join(os.tmpdir(), 'elec-stats-crosscheck');
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(tmpDir, { recursive: true });
+    let closeDb: (() => void) | undefined;
     try {
       process.env.ELEC_DB_PATH = path.join(tmpDir, 'elec.db');
       const db = await import(libUrl('db.ts', `stats-${Date.now()}`));
+      closeDb = () => db.getDb().close();
 
       const now = new Date();
       const ymd = (d: Date) =>
@@ -655,11 +680,7 @@ async function runRegressionTests() {
     } finally {
       if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
       else process.env.ELEC_DB_PATH = savedDbPath;
-      try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      } catch {
-        // Windows 上 sqlite 连接未关，临时文件可能删不掉；不影响测试结论
-      }
+      await cleanupTempDir(tmpDir, closeDb);
     }
   }
 
@@ -673,9 +694,11 @@ async function runRegressionTests() {
     const tmpDir = path.join(os.tmpdir(), 'elec-cascade-test');
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(tmpDir, { recursive: true });
+    let closeDb: (() => void) | undefined;
     try {
       process.env.ELEC_DB_PATH = path.join(tmpDir, 'elec.db');
       const db = await import(libUrl('db.ts', `cascade-${Date.now()}`));
+      closeDb = () => db.getDb().close();
 
       // 场景 1：A(01-10, 500) → B(01-20, 1100)。把 A 改到更晚的 01-15、值 900。
       // A 的新位置在它旧位置之后、B 之前，所以它自己会是「后一条」候选里的第一个。
@@ -708,11 +731,7 @@ async function runRegressionTests() {
     } finally {
       if (savedDbPath === undefined) delete process.env.ELEC_DB_PATH;
       else process.env.ELEC_DB_PATH = savedDbPath;
-      try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      } catch {
-        // Windows 上 sqlite 连接未关，临时文件可能删不掉；不影响测试结论
-      }
+      await cleanupTempDir(tmpDir, closeDb);
     }
   }
 
@@ -727,10 +746,12 @@ async function runRegressionTests() {
     const tmpDir = path.join(os.tmpdir(), 'elec-backup-test');
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(path.join(tmpDir, 'data'), { recursive: true });
+    let closeDb: (() => void) | undefined;
     try {
       process.env.ELEC_DB_PATH = path.join(tmpDir, 'data', 'elec.db');
       process.env.ELEC_BACKUP_DIR = path.join(tmpDir, 'backups'); // 故意不预建，让实现自己建
       const db = await import(libUrl('db.ts', `backup-${Date.now()}`));
+      closeDb = () => db.getDb().close();
 
       db.createReading({ reading_value: 1000, reading_date: '2026-01-01', reading_time: '08:00' });
 
@@ -750,11 +771,7 @@ async function runRegressionTests() {
       else process.env.ELEC_DB_PATH = savedDbPath;
       if (savedBackupDir === undefined) delete process.env.ELEC_BACKUP_DIR;
       else process.env.ELEC_BACKUP_DIR = savedBackupDir;
-      try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      } catch {
-        // Windows 上 sqlite 连接未关，临时文件可能删不掉；不影响测试结论
-      }
+      await cleanupTempDir(tmpDir, closeDb);
     }
   }
 }
