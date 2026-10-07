@@ -160,6 +160,7 @@ const dir = BACKUP_DIR;
 
 - `npm test` → `scripts/test-calculations.ts`：纯函数与统计口径（图表取数、月度用电量、级联修正、设置白名单、备份目录）。
 - 构建之后跑两个真实进程校验：`scripts/test-cold-start.mjs`（冷启动会话）、`scripts/test-backup-http.mjs`（备份往返）。
+- `npm run test:e2e` → `scripts/e2e/*.mjs`：起临时库 + 真实浏览器跑端到端。**开浏览器之前先读 [docs/e2e.md](e2e.md#第一原则大多数验收不该开浏览器)** —— 认证、状态码、响应头这些在 HTTP 层断就行，开了浏览器反而更慢更脆。
 - `npm run build` 的 postbuild → `scripts/lib/check-standalone-clean.mjs`：检查 `.next/standalone` 顶层是否被 trace 脏了。
 
 以上都在 CI 里跑。下面这个顺序是给**新增**测试用的。

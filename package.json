@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "eslint --max-warnings 0",
     "test": "node --experimental-strip-types scripts/test-calculations.ts",
+    "test:e2e": "node scripts/e2e/run.mjs",
     "mcp": "npx tsx mcp-server.ts"
   },
   "dependencies": {
