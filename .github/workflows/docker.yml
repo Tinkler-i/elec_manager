@@ -169,9 +169,13 @@ jobs:
           push: true
           # name= 不能删 —— v1.9.5 就是栽在这里。
           #
-          # ⚠️ 状态：**这个修复尚未实测。** 依据是 buildx 源码级的静态分析 + 下面那条
-          # 天然对照；**下一次打 tag 才是它第一次真跑**。别把它当成「已修复」——
-          # 下次发版要专门确认这个 job 是绿的（见 docs/release.md 的发版后检查）。
+          # ⚠️ 状态：**v1.10.0 发版时实测通过**（tag 推送，5 个 job 全绿：meta /
+          # smoke / build×2 / merge）—— 那是这个修复的第一次真跑，也是这条路径的
+          # 第一次真跑。此前 v1.9.5 红了，根因见下。
+          #
+          # 注意：PR 事件不跑 build / merge（见上面的 if），所以 PR 上它显示 success
+          # 不代表它是好的。改了 outputs / digest / imagetools 那几步之后，要在 tag
+          # 或 workflow_dispatch 上确认（见 docs/release.md 的发版后检查）。
           #
           # 根因（buildx/build/opt.go 的 toSolveOpt()）：
           #   · 有 tags → 用 tags 去填每个 image/oci/docker export 的 name
