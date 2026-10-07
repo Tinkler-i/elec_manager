@@ -97,6 +97,11 @@ const NOTE_UNIT_HINT = graphemeCounter.exact ? "（一个 emoji 算 1 个）" : 
  * 就又是「界面放行、后端拒绝」。
  *
  * 传 `undefined` 表示不带 body（备注留空时 `createKey` 就是这么发的），算 0 字节。
+ *
+ * **同一个备注，新建和编辑算出来的字节数不一样**：PATCH 的 body 是 `{ id, note }`，
+ * 比 POST 的 `{ note }` 多一个 36 字符的 uuid，所以**编辑路径的有效上限比新建小 44 字节**
+ * （实测：同一段备注新建 8205、编辑 8249）。这不是算错 —— 上限卡的是**整个请求体**，
+ * 两条路径各按自己真正要发的形状算才对。看到同一段备注在两处显示不同字节数时别当成 bug。
  */
 const jsonBodyBytes = (payload: unknown): number =>
   payload === undefined ? 0 : new TextEncoder().encode(JSON.stringify(payload)).length;
