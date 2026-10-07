@@ -20,14 +20,16 @@
  * 新增**可公开**的设置项时必须同时加进 PUBLIC_SETTING_KEYS，否则 GET /api/settings
  * 和 MCP 的 get_settings 都不会返回它，前端表现成「设置存了但读不到」。
  *
- * 全仓库写 settings 的 key 目前只有 6 个：
+ * 全仓库写 settings 的 key 目前只有 3 个：
  *   · rate_per_kwh          —— 电价费率（src/lib/db.ts 初始化）
  *   · initial_reading       —— 初始读数（src/lib/db.ts 初始化）
- *   · auth_password         —— bcrypt 密码哈希（src/lib/auth.ts:65）
- *   · mcp_key_hash          —— MCP 密钥的 SHA-256（src/lib/mcp-key.ts:57）
- *   · mcp_key_created_at    —— 密钥生成时间（src/lib/mcp-key.ts:58）
- *   · mcp_key_last_used_at  —— 密钥最后使用时间（src/lib/mcp-key.ts:91）
- * 前两个在白名单里，后四个不在 —— 不在白名单 = 不外发。
+ *   · auth_password         —— bcrypt 密码哈希（src/lib/auth.ts:72 / 83）
+ * 只有前两个在白名单里 —— 不在白名单 = 不外发。
+ *
+ * MCP 密钥曾经也放在这里（mcp_key_hash / mcp_key_created_at / mcp_key_last_used_at 三个 key
+ * 存一把）。2026-10 支持多把之后搬到了独立的 mcp_keys 表，启动时由 db.ts 的
+ * migrateLegacyMcpKey 迁过去、并删掉那三个 key —— 所以这里不再列它们。
+ * **别**再把它们当成 settings 的 key 加回来。
  *
  * 注意：不外发不代表不能通过 settings 表读写。密码改由 PUT /api/auth/password 维护，
  * MCP 密钥由 /api/mcp/key 维护。

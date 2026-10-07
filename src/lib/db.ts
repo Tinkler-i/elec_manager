@@ -77,8 +77,19 @@ function initializeDb(db: Database.Database) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS mcp_keys (
+      id           TEXT PRIMARY KEY,
+      hash         TEXT NOT NULL UNIQUE,
+      note         TEXT,
+      created_at   TEXT NOT NULL,
+      last_used_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_readings_date ON readings(reading_date);
   `);
+
+  // 单把密钥时代把密钥存在 settings 里，启动时迁进 mcp_keys（幂等，见函数注释）
+  migrateLegacyMcpKey(db);
 
   // Migration: add reading_time column if missing
   const columns = db.prepare("PRAGMA table_info(readings)").all() as { name: string }[];
@@ -97,6 +108,45 @@ function initializeDb(db: Database.Database) {
     db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('initial_reading', '0');
     cachedInitialReading = 0;
   }
+}
+
+/**
+ * 把「只能有一把密钥」时代的三个 setting 迁进 mcp_keys 表（2026-10 起支持多把）。
+ *
+ * **为什么是迁不是作废**：用户可能已经把密钥配进了 Claude Desktop / Cursor 之类的
+ * 客户端。升级后要是那条密钥不认了，客户端就断了，而且用户拿不回明文去重配 ——
+ * 只能重新生成、逐个改客户端。所以旧密钥必须继续能用。
+ *
+ * **幂等**：插入 + 删那三个 setting 在**同一个事务**里，所以
+ *   · 第一次启动：settings 里还有 mcp_key_hash → 迁一条，随即删掉三个 key；
+ *   · 之后每次启动：mcp_key_hash 已经不在了 → 直接返回，不会迁出第二条。
+ * 另外「表非空就不迁」是第二道保险：万一哪天有人手工补回 setting，也不会多出一条。
+ */
+function migrateLegacyMcpKey(db: Database.Database) {
+  const legacyHash = (
+    db.prepare("SELECT value FROM settings WHERE key = 'mcp_key_hash'").get() as { value: string } | undefined
+  )?.value;
+  if (!legacyHash) return;
+
+  const existing = db.prepare('SELECT COUNT(*) AS n FROM mcp_keys').get() as { n: number };
+  if (existing.n > 0) return;
+
+  const readLegacy = (key: string): string | null =>
+    (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
+
+  db.transaction(() => {
+    db.prepare(
+      'INSERT INTO mcp_keys (id, hash, note, created_at, last_used_at) VALUES (?, ?, NULL, ?, ?)'
+    ).run(
+      uuidv4(),
+      legacyHash,
+      readLegacy('mcp_key_created_at') ?? new Date().toISOString(),
+      readLegacy('mcp_key_last_used_at'),
+    );
+    db.prepare(
+      "DELETE FROM settings WHERE key IN ('mcp_key_hash', 'mcp_key_created_at', 'mcp_key_last_used_at')"
+    ).run();
+  })();
 }
 
 export function generateId(): string {
@@ -126,8 +176,9 @@ export function getInitialReading(): number {
 
 // ─── 设置：读写 ─────────────────────────────────────────────────────────────
 //
-// settings 是通用的 key-value 表，凭据（auth_password、mcp_key_*）和普通配置
+// settings 是通用的 key-value 表，凭据（auth_password）和普通配置
 // （rate_per_kwh、initial_reading）混在一起。外发前必须先过 toPublicSettings()。
+// （MCP 密钥原来也在这里，2026-10 起搬到了 mcp_keys 表，见 migrateLegacyMcpKey。）
 
 /** 读一个设置项；不存在返回 undefined */
 export function getSetting(key: string): string | undefined {
@@ -140,9 +191,12 @@ export function getSetting(key: string): string | undefined {
 /**
  * 写一个设置项（不存在则插入，存在则覆盖）。
  *
- * 刻意不在这里自动清设置缓存：touchMcpKey 会周期性写 mcp_key_last_used_at，
- * 自动清缓存会让 getRatePerKwh / getInitialReading 无谓地反复查库。
+ * 刻意不在这里自动清设置缓存：getRatePerKwh / getInitialReading 是热路径，缓存的意义
+ * 就在这里；每写一次 setting 就顺手清掉，会让改密码之类的写入白白打掉缓存、多查几次库。
  * 改了 rate_per_kwh / initial_reading 的调用方要自己调 invalidateSettingsCache()。
+ *
+ * （2026-10：这条注释原来举的例子是「touchMcpKey 会周期性写 mcp_key_last_used_at」，
+ * MCP 密钥搬进 mcp_keys 表之后那个前提不存在了，理由本身仍然成立。）
  */
 export function setSetting(key: string, value: string): void {
   getDb().prepare(`

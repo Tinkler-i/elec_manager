@@ -10,7 +10,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
  * AI 客户端（Claude Desktop、Cursor 等）可通过此端点与本系统进行 MCP 通信。
  *
  * 认证：`Authorization: Bearer <凭证>`，接受两种 ——
- *   · 独立的 MCP 密钥（`elecmcp_...`，客户端用，可在 MCP 页随时重新生成）
+ *   · 独立的 MCP 密钥（`elecmcp_...`，客户端用，可在 MCP 页生成/吊销多把）
  *   · 登录会话的 JWT（浏览器里调试用）
  *
  * 为什么鉴权放在这里而不是 `src/proxy.ts`：proxy 跑在 Edge runtime，读不了
@@ -30,8 +30,10 @@ function authorize(request: Request): AuthResult {
   // 先当会话 JWT 试（无状态，最快）
   if (verifyToken(credential)) return { ok: true, via: 'session' };
 
-  if (verifyMcpKey(credential)) {
-    touchMcpKey();
+  const matchedKey = verifyMcpKey(credential);
+  if (matchedKey) {
+    // 多把之后必须告诉 touch 是哪一把 —— 不然会去更新别的密钥的「最后使用时间」
+    touchMcpKey(matchedKey.id);
     return { ok: true, via: 'key' };
   }
 
