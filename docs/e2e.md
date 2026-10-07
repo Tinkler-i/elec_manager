@@ -121,6 +121,27 @@ await browser.close();                    // 杀进程树 + 删临时 profile
 **结论**：像素级对比、字体渲染、真实设备观感 —— **仍然要真机浏览器**。
 无头浏览器适合断「结构、状态码、DOM 内容、流程是否走通」，不适合断「好不好看」。
 
+**所以无头 e2e 只能当结构回归，不能当视觉门。** 它证明的是「流程走得通、DOM 与状态码对得上」，
+不是「页面长得对」。任何「看起来有没有变」的验收，仍然要真机浏览器看图。
+
+## 水合断言验到哪一步（别写过头）
+
+`scripts/e2e/mcp-keys.mjs` 里有一条「水合零告警」：真实整页加载 `/mcp`，把这次加载新增的
+控制台消息按关键词过滤：
+
+```js
+/hydrat|did not match|server rendered|hydration failed|text content does not match/i
+```
+
+**它验的是「本次加载没有出现已知形态的水合告警」，不是「React 绝不会水合错」。** 这两件事不一样：
+
+- 关键词表覆盖不到的水合问题，它抓不到；
+- 反过来，不相干的日志里出现 `hydrat` 这类词也会误报；
+- 它只看 `/mcp` 这一条路径、这一次加载。
+
+把它当一道**便宜的哨兵**：已知的、形态固定的水合问题复发时会响。
+**别在 PR 或汇报里把它写成「已验证不存在水合问题」。**
+
 ## 一次跑完的画法
 
 **反模式**：一个动作一次 `evaluate`。
@@ -144,11 +165,54 @@ const out = await page.evaluate(async () => { /* 等 → 填 → 点 → 等 →
 ## 自检：确认这道门真的会红
 
 ```bash
-npm run test:e2e -- --probe-failure
+npm run test:e2e -- --probe-failure   # 跑全部用例，末尾追加一条必然失败的
+npm run test:e2e -- --self-check      # 只跑那条必然失败的，并**反转退出码**：绿 = 「门会红」
 ```
 
-插入一条必然失败的断言，确认跑者给出**非零退出码**并列出失败清单。
-「红着的门等于没有门」在这里的具体版本：**只证明过绿会绿，等于没证明过这道门**。
+两者都插入一条必然失败的断言（期望一个不存在的路由返回 200 —— 别用「未登录应当 401」，
+用例共用 fixture，cookie jar 是累积的，前面有人登录过这条断言反而会成立）。
+
+`--self-check` 是给 CI 用的：它把「失败 → 非零退出码」这件事**本身**当成被测对象。
+**它绿的意思不是「用例都过」，而是「这道门不是装饰品」。** 判据卡得很死：
+
+- 那条用例必须是因为**断言失败**（`AssertionError`）而失败 —— fixture 起不来、浏览器崩了
+  这类环境问题不算「门会响」，会让自检变红；
+- 退出码用的是**和正常模式同一行**的计算。自检要是自己另写一套退出逻辑，它证明的就不是这道门了。
+
+## 在 CI 里
+
+`ci.yml` 的最后三步，都排在 `构建` 之后，**复用同一份 `.next/standalone`，不额外构建**：
+
+```yaml
+- name: 确认 headless 浏览器可用（e2e 的前提）   # 显式解析一次路径
+- name: 端到端（e2e）                            # npm run test:e2e
+- name: e2e 门自检（会响 + 没被豁免）            # npm run test:e2e -- --self-check
+```
+
+**浏览器从哪来**：GitHub 的 `ubuntu-latest` 镜像自带 Google Chrome 和 Chromium。
+探测顺序见 `scripts/lib/cdp.mjs` 的 `browserCandidates()`（Linux 上依次找
+`/usr/bin/google-chrome`、`/usr/bin/google-chrome-stable`、`/usr/bin/google-chrome-beta`、
+`/opt/google/chrome/chrome`、`/usr/bin/chromium`、`/usr/bin/chromium-browser`、
+`/snap/bin/chromium`、`/usr/lib/chromium/chromium`）。
+
+**找不到浏览器不会静默跳过**：第一步就是显式解析一次路径，解析不出来那一步直接红。
+不这么做的话，探测失败会烂在后面 —— 静默跳过等于这道门不存在。
+需要指路或加参数时：`E2E_BROWSER=/path/to/chrome`、`E2E_BROWSER_ARGS="--no-sandbox --disable-dev-shm-usage"`。
+
+**没有被豁免**：`e2e` 那一步没有 `continue-on-error`，它红了整条工作流就红。
+自检那一步还会检查 `ci.yml` 里**任何**步骤都没有这个键 —— 质量门不该有「红了也不管」的步骤；
+真有需要，就把那个步骤挪出 `ci.yml`。
+
+**耗时**（本机实测，Windows；口径见下）：
+
+| | 累计 |
+|---|---|
+| 加 e2e 之前（8 步：typegen / tsc / lint / test / build / standalone 检查 / 冷启动 / 备份往返） | 35.7s |
+| 加 e2e 之后（11 步） | 52.3s |
+| **增量** | **+16.5s**（预检 0.1s + e2e 13.4s + 自检 3.0s） |
+
+这是 Windows 本机的墙钟时间，**不等于 GitHub runner 的耗时**；而且这里只量了**增量** ——
+e2e 复用已有构建产物，不额外构建，所以它多花的就只有跑的那十几秒。
 
 ## 善后：不留垃圾
 

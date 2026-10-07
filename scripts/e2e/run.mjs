@@ -4,6 +4,8 @@
  *
  *   npm run test:e2e                 跑全部用例
  *   npm run test:e2e -- --probe-failure   自检：故意插一条失败用例，确认跑者真的会红
+ *   npm run test:e2e -- --self-check      同上，但**只跑那条**失败用例，并反转退出码：
+ *                                         「门会红」才绿。CI 里用它证明这道门不是装饰品。
  *
  * 每个用例文件导出 `cases = [{ name, needsBrowser?, fn(ctx) }]`。
  * `ctx = { fixture, browser, page, assert }`。
@@ -56,10 +58,12 @@ function indent(text) {
     .join('\n');
 }
 
+const argv = process.argv.slice(2);
+const selfCheck = argv.includes('--self-check');
 const cases = await loadCases();
 
 // 自检用：验证「失败会红」这件事本身还成立
-if (process.argv.includes('--probe-failure')) {
+if (argv.includes('--probe-failure') || selfCheck) {
   cases.push({
     file: '(自检)',
     name: '[自检] 故意写错的断言 —— 用来确认跑者会给非零退出码',
@@ -77,6 +81,14 @@ if (process.argv.includes('--probe-failure')) {
       );
     },
   });
+}
+
+// 自检模式只跑那条必然失败的用例。它要证明的是「失败会变成非零退出码」，
+// 不是「用例都过」；跑整套只会让 CI 每轮多花一整圈 e2e 的时间。
+if (selfCheck) {
+  const probe = cases[cases.length - 1];
+  cases.length = 0;
+  cases.push(probe);
 }
 
 if (cases.length === 0) {
@@ -183,10 +195,40 @@ try {
 }
 
 const failed = results.filter((r) => !r.ok);
+
+// **门的判据只有这一行**，正常模式和自检模式共用它。
+// 自检如果自己另写一套退出逻辑，它证明的就不是这道门了 —— 所以这里刻意只算一次。
+const exitCode = failed.length > 0 ? 1 : 0;
+
+// 自检模式**反转退出码**：它要绿在「会红」上。
+// 判据还额外卡住「那条用例是因为断言失败而失败的」，不能只看「有东西失败了」——
+// 否则 fixture 起不来、浏览器崩了这类环境问题也会让自检「通过」，那就白自检了。
+if (selfCheck) {
+  const probe = results.find((r) => r.item.file === '(自检)');
+  const gateWorks =
+    exitCode === 1 && Boolean(probe && !probe.ok && probe.error?.name === 'AssertionError');
+
+  console.log('');
+  if (gateWorks) {
+    console.log('✅ e2e 门自检通过：故意失败的用例确实变成了非零退出码 —— 这道门会响。');
+  } else if (!probe) {
+    console.log('✗ e2e 门自检失败：自检用例根本没跑起来。');
+  } else if (probe.ok) {
+    console.log('✗ e2e 门自检失败：故意失败的用例竟然通过了 —— 这道门是装饰品。');
+  } else {
+    console.log(
+      `✗ e2e 门自检失败：那条用例是以 ${probe.error?.name} 失败的，不是断言失败，` +
+        '或者门的退出码没跟着失败走。\n' +
+        '  这说明判据本身坏了（fixture / 浏览器起不来，或退出码没传播），得不出「门会响」的结论。',
+    );
+  }
+  process.exit(gateWorks ? 0 : 1);
+}
+
 console.log('');
 console.log(`结果：${results.length - failed.length} 通过 / ${failed.length} 失败，共 ${results.length} 条`);
 if (failed.length > 0) {
   console.log('失败清单：');
   for (const r of failed) console.log(`  · ${r.item.name}（${r.item.file}）`);
 }
-process.exit(failed.length > 0 ? 1 : 0);
+process.exit(exitCode);

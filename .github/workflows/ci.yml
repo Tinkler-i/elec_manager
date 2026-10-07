@@ -75,3 +75,29 @@ jobs:
       # 但钉不住「route 自己忘了 await 助手」。只有真打一次 HTTP 才能发现。
       - name: 备份往返回归（返回时文件必须已完整）
         run: node scripts/test-backup-http.mjs
+
+      # e2e 要真浏览器。先**显式解析一次路径**：找不到就在这里红。
+      # 不这么做的话，探测失败会烂在后面的步骤里、或者更糟 —— 静默跳过等于这道门不存在。
+      # GitHub 的 ubuntu runner 自带 Google Chrome，装在 /usr/bin/google-chrome；
+      # 探测顺序见 scripts/lib/cdp.mjs 的 browserCandidates()。
+      - name: 确认 headless 浏览器可用（e2e 的前提）
+        run: |
+          set -euo pipefail
+          node --input-type=module -e "import { resolveBrowserPath } from './scripts/lib/cdp.mjs'; console.log('  e2e 用的浏览器：' + resolveBrowserPath());"
+
+      # 端到端：临时库 + 真实 headless Chrome 跑页面流程（见 docs/e2e.md）。
+      # 复用上面「构建」那步产出的 .next/standalone，**不额外构建** —— 所以它只多花十几秒。
+      # 这一步红了 CI 就该红：**不要加 continue-on-error**，那会把它变成装饰品。
+      - name: 端到端（e2e）
+        run: npm run test:e2e
+
+      # 门自检，两件事：
+      #   ① **这道门有没有被豁免**。质量门里不允许出现「红了也不管」的步骤 —— 那是最彻底的
+      #      装饰。这条工作流不该有任何非致命步骤；真有需要，把那个步骤挪出 ci.yml。
+      #   ② 插一条必然失败的用例，确认失败**真的**会变成非零退出码（退出判据与上面的 e2e 共用一行）。
+      # 这一步绿 = 「这道门会响」，不是「用例都过」。只跑那一条，不重跑整套。
+      - name: e2e 门自检（会响 + 没被豁免）
+        run: |
+          set -euo pipefail
+          node -e "const yaml=require('js-yaml'),fs=require('fs');const d=yaml.load(fs.readFileSync('.github/workflows/ci.yml','utf8'));const exempt=d.jobs.check.steps.filter((s)=>s['continue-on-error']);if(exempt.length){console.error('::error::这些步骤被豁免了（红了也不管）：'+exempt.map((s)=>s.name||s.uses).join(', '));process.exit(1)}console.log('  ✅ 这条工作流里没有豁免步骤');"
+          npm run test:e2e -- --self-check

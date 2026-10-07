@@ -24,29 +24,76 @@ import { killTree, sweepStaleTempDirs } from './postbuild-server.mjs';
 
 const DEFAULT_TIMEOUT = 30000;
 
-/** 找浏览器：显式传入 > CHROME_PATH > EDGE_PATH > 常见安装位置 */
+/**
+ * 候选浏览器路径。**抽成纯函数**（平台与 env 当参数传进来）是为了能在 Windows 上
+ * 单独验 Linux 那一支 —— 开发机只有 Windows，但 CI 跑的是 ubuntu。
+ */
+export function browserCandidates(platform, env) {
+  const candidates = [];
+
+  if (platform === 'win32') {
+    candidates.push(
+      env.ProgramFiles && path.join(env.ProgramFiles, 'Google/Chrome/Application/chrome.exe'),
+      env.ProgramFiles && path.join(env.ProgramFiles, 'Microsoft/Edge/Application/msedge.exe'),
+      env['ProgramFiles(x86)'] && path.join(env['ProgramFiles(x86)'], 'Google/Chrome/Application/chrome.exe'),
+      env['ProgramFiles(x86)'] && path.join(env['ProgramFiles(x86)'], 'Microsoft/Edge/Application/msedge.exe'),
+      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe'),
+      env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Microsoft/Edge/Application/msedge.exe'),
+    );
+  } else if (platform === 'darwin') {
+    candidates.push(
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    );
+  } else {
+    // Linux。GitHub 的 ubuntu runner 自带 Google Chrome，装在 `/usr/bin/google-chrome`
+    //（指向 google-chrome-stable 的符号链接）；其余是各家发行版的常见位置。
+    candidates.push(
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome-beta',
+      '/opt/google/chrome/chrome',
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/snap/bin/chromium',
+      '/usr/lib/chromium/chromium',
+    );
+  }
+
+  return candidates.filter(Boolean);
+}
+
+/** 找浏览器：显式传入 > E2E_BROWSER / CHROME_PATH / EDGE_PATH > 按平台探测 */
 export function resolveBrowserPath(explicit) {
   const candidates = [
     explicit,
     process.env.E2E_BROWSER,
     process.env.CHROME_PATH,
     process.env.EDGE_PATH,
-    process.platform === 'win32' && path.join(process.env.ProgramFiles ?? '', 'Google/Chrome/Application/chrome.exe'),
-    process.platform === 'win32' && path.join(process.env['ProgramFiles(x86)'] ?? '', 'Microsoft/Edge/Application/msedge.exe'),
-    process.platform === 'win32' && path.join(process.env.LOCALAPPDATA ?? '', 'Google/Chrome/Application/chrome.exe'),
-    process.platform === 'darwin' && '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium',
-    '/usr/bin/chromium-browser',
+    ...browserCandidates(process.platform, process.env),
   ].filter(Boolean);
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;
   }
+
   throw new Error(
-    '找不到浏览器。用 E2E_BROWSER=/path/to/chrome 指定，或装一个 Chrome / Edge。\n' +
-      `找过：\n  ${candidates.join('\n  ')}`,
+    '找不到浏览器，e2e 起不来。\n' +
+      '  · 显式指定：E2E_BROWSER=/path/to/chrome npm run test:e2e\n' +
+      '  · GitHub 的 ubuntu runner 自带 Chrome，在 /usr/bin/google-chrome\n' +
+      '  · 本机装一个 Chrome / Edge / Chromium 即可\n' +
+      `找过这些位置：\n  ${candidates.join('\n  ')}`,
   );
+}
+
+/**
+ * 额外的浏览器启动参数，空格分隔，来自 `E2E_BROWSER_ARGS`。
+ * 给 CI / 容器环境留的出口（例如某些容器需要 `--no-sandbox --disable-dev-shm-usage`）。
+ * **默认不预设任何值** —— 需要什么就明确写什么，别把兼容性当默认。
+ */
+export function extraBrowserArgs() {
+  return (process.env.E2E_BROWSER_ARGS ?? '').split(/\s+/).filter(Boolean);
 }
 
 function delay(ms) {
@@ -402,6 +449,7 @@ export async function launch({
       '--disable-gpu',
       '--hide-scrollbars',
       `--window-size=${windowSize}`,
+      ...extraBrowserArgs(),
       ...args,
       'about:blank',
     ],
