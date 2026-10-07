@@ -34,10 +34,48 @@ import type { McpKeyCreated, McpKeyInfo } from "@/types";
 
 /* ── 密钥 ───────────────────────────────────────────────────────────────── */
 
-/** 备注长度上限。后端超了返 400，这里先挡一道，别让用户白填 */
+/**
+ * 备注长度上限，单位是**字素簇**（一个 emoji 算 1）。后端超了返 400，这里先挡一道。
+ *
+ * 注意别用 `maxLength` 属性来挡：HTML 的 maxLength 数的是 UTF-16 码元，一个 😀 算 2、
+ * 一个带 ZWJ 的 🧑‍🚀 算 7。用户想输 64 个 emoji，输入框会在 32 个就截断 —— 而后端按
+ * 字素簇算，会接受 64 个。两边对「64 个字符」的理解必须一致，所以只能 JS 计数。
+ */
 const NOTE_MAX = 64;
 /** 密钥把数上限。后端超了返 400 */
 const KEY_LIMIT = 20;
+
+/**
+ * 数备注长度。规则与后端 `Intl.Segmenter('zh', { granularity: 'grapheme' })` 一致。
+ *
+ * 先 `trim()` 再数：后端存之前也会 trim，所以这里算的就是**实际会被提交的那个值**，
+ * 计数显示和后台的判断不会差一个空格。
+ *
+ * `Intl.Segmenter` 在 Node 18+ 和现代浏览器里都有。万一没有（老运行时），退回
+ * `Array.from(...).length` —— 它按码点迭代，代理对（单个 emoji）算 1 个是对的，但会把
+ * ZWJ 组合序列拆开多算（🧑‍🚀 算 3 而不是 1）。这是**偏保守**的降级：宁可少数复杂 emoji
+ * 被多算，也不要因为构造函数不存在就白屏。构造函数在模块加载时探一次，不在渲染里试。
+ *
+ * 所以这里返回两样东西：`count` 是计数器，`exact` 说明它是不是真的按字素簇算。
+ * **提示文案要跟着 `exact` 改口** —— 一边按码点算、一边告诉用户「一个 emoji 算 1 个」，
+ * 就是在骗人。
+ *
+ * SSR 和客户端用的是同一个实现、同一个输入，算出的数必然相同，不会引入水合不一致。
+ */
+const graphemeCounter = ((): { count: (text: string) => number; exact: boolean } => {
+  try {
+    const segmenter = new Intl.Segmenter("zh", { granularity: "grapheme" });
+    return { count: (text) => [...segmenter.segment(text)].length, exact: true };
+  } catch {
+    return { count: (text) => Array.from(text).length, exact: false };
+  }
+})();
+
+/** 备注长度（trim 后）。空串是 0 */
+const noteLength = (text: string) => graphemeCounter.count(text.trim());
+
+/** 长度单位说明。降级成按码点算时不能再说「一个 emoji 算 1 个」 */
+const NOTE_UNIT_HINT = graphemeCounter.exact ? "（一个 emoji 算 1 个）" : "（按码点算）";
 
 /* ── 页头用的站点源 ─────────────────────────────────────────────────────── */
 
@@ -101,9 +139,12 @@ export default function McpPage() {
   // tools 先回来时它就已经是 false 了，那会闪一下「还没有密钥」的假空态。
   const keysLoading = values.keys === undefined && !errors.keys;
   const atLimit = keys.length >= KEY_LIMIT;
+  // 备注按字素簇算，不是 String.length —— 一个 emoji 算 1 个
+  const noteLen = noteLength(noteDraft);
+  const noteTooLong = noteLen > NOTE_MAX;
 
   async function createKey() {
-    if (busy || atLimit) return;
+    if (busy || atLimit || noteTooLong) return;
     setBusy(true);
     try {
       const result = await mcpApi.createKey(noteDraft.trim() || undefined);
@@ -121,6 +162,12 @@ export default function McpPage() {
 
   async function saveNote(id: string) {
     if (busy) return;
+    // 超长不该走到这里（按钮已禁用），留一道兜底：后端会 400，与其让用户看报错，
+    // 不如在这一层就说清楚
+    if (noteLength(editDraft) > NOTE_MAX) {
+      toast.error(`备注最多 ${NOTE_MAX} 个字符${NOTE_UNIT_HINT}`);
+      return;
+    }
     setBusy(true);
     try {
       // 清空备注要显式传 null —— 后端把「缺 note 字段」当成 400，不当成清空
@@ -332,13 +379,13 @@ export default function McpPage() {
                     }}
                     placeholder="备注，例如「家里那台 NAS」（可选）"
                     aria-label="新密钥的备注"
-                    maxLength={NOTE_MAX}
+                    aria-invalid={noteTooLong}
                     disabled={busy || atLimit}
                   />
                   <Button
                     className="shrink-0"
                     onClick={() => void createKey()}
-                    disabled={busy || atLimit}
+                    disabled={busy || atLimit || noteTooLong}
                   >
                     <KeyRound />
                     生成密钥
@@ -346,10 +393,23 @@ export default function McpPage() {
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-muted-foreground">
                   <span>备注最多 {NOTE_MAX} 个字符，留空则显示「未命名」</span>
-                  <span>
-                    {keys.length} / {KEY_LIMIT} 把
+                  <span className="flex items-center gap-x-3">
+                    <span className={noteTooLong ? "font-medium text-destructive" : undefined}>
+                      备注 {noteLen} / {NOTE_MAX}
+                    </span>
+                    <span>
+                      {keys.length} / {KEY_LIMIT} 把
+                    </span>
                   </span>
                 </div>
+                {noteTooLong ? (
+                  <p
+                    aria-live="polite"
+                    className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive"
+                  >
+                    备注 {noteLen} 个字符，超过 {NOTE_MAX} 了{NOTE_UNIT_HINT}。删掉一些再生成。
+                  </p>
+                ) : null}
                 {atLimit ? (
                   <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300">
                     已经到 {KEY_LIMIT} 把上限了。先吊销不用的，再建新的。
@@ -603,24 +663,37 @@ function KeyRow({
   onRevoke: () => void;
 }) {
   const note = info.note?.trim();
+  // 就地编辑这一行也按字素簇算，和新建那条保持一致
+  const draftLen = noteLength(draft);
+  const draftTooLong = draftLen > NOTE_MAX;
 
   return (
     <li className="rounded-lg border border-border p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1 space-y-1">
           {editing ? (
-            <Input
-              value={draft}
-              onChange={(e) => onDraftChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onSave();
-                if (e.key === "Escape") onCancelEdit();
-              }}
-              aria-label="备注"
-              placeholder="备注（可留空）"
-              maxLength={NOTE_MAX}
-              disabled={busy}
-            />
+            <div className="space-y-1">
+              <Input
+                value={draft}
+                onChange={(e) => onDraftChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !draftTooLong) onSave();
+                  if (e.key === "Escape") onCancelEdit();
+                }}
+                aria-label="备注"
+                aria-invalid={draftTooLong}
+                placeholder="备注（可留空）"
+                disabled={busy}
+              />
+              <div
+                className={`text-xs ${
+                  draftTooLong ? "font-medium text-destructive" : "text-muted-foreground"
+                }`}
+              >
+                备注 {draftLen} / {NOTE_MAX}
+                {draftTooLong ? ` · 超过 ${NOTE_MAX} 了${NOTE_UNIT_HINT}` : ""}
+              </div>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <KeyRound className="size-4 shrink-0 text-muted-foreground" />
@@ -640,7 +713,7 @@ function KeyRow({
         <div className="flex shrink-0 flex-wrap gap-1">
           {editing ? (
             <>
-              <Button size="sm" disabled={busy} onClick={onSave}>
+              <Button size="sm" disabled={busy || draftTooLong} onClick={onSave}>
                 <Check />
                 保存
               </Button>
